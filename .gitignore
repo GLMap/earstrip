@@ -1,0 +1,6 @@
+test/test
+bench/bench
+js/dist/
+js/node_modules/
+*.bin
+.DS_Store
