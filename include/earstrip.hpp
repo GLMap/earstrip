@@ -2061,6 +2061,18 @@ private:
     {
         const Node *n = _nodes.data();
         uint32_t lo = 1, hi = count - 1;
+        if (!_listMode) {
+            // the common case of strips, without the list writer's state
+            _strips.push_back(n[0].index);
+            while (lo <= hi) {
+                _strips.push_back(n[lo++].index);
+                if (lo <= hi)
+                    _strips.push_back(n[hi--].index);
+            }
+            _stripEnds.push_back((uint32_t)_strips.size());
+            _stripCW.push_back(clockwise);
+            return;
+        }
         beginStrip(clockwise);
         put(n[0].index);
         while (lo <= hi) {
@@ -2080,18 +2092,18 @@ private:
     // Adds an index to the strip being written; in list mode every index from the third on writes its triangle.
     EARSTRIP_INLINE void put(Index i)
     {
-        if (_listMode) {
-            if (_stripLen >= 2) {
-                const bool flip = (((_stripLen - 2) & 1) != 0) != _cw;
-                _list.push_back(flip ? _p1 : _p0);
-                _list.push_back(flip ? _p0 : _p1);
-                _list.push_back(i);
-            }
-            _p0 = _p1;
-            _p1 = i;
-        } else {
+        if (!_listMode) {
             _strips.push_back(i);
+            return;
         }
+        if (_stripLen >= 2) {
+            const bool flip = (((_stripLen - 2) & 1) != 0) != _cw;
+            _list.push_back(flip ? _p1 : _p0);
+            _list.push_back(flip ? _p0 : _p1);
+            _list.push_back(i);
+        }
+        _p0 = _p1;
+        _p1 = i;
         _stripLen++;
     }
 
@@ -2693,7 +2705,18 @@ private:
 
     // Cuts ears from the boundary through v into zig-zag strips; false when no ear is left even after the cleanup and
     // forced cuts are off.
-    bool clip(uint32_t v, uint32_t count)
+    bool clip(uint32_t v, uint32_t count) { return _listMode ? clipAs<true>(v, count) : clipAs<false>(v, count); }
+
+    // put() for an output mode known at compile time: the strips mode is a plain push in the hot loop.
+    template <bool List> EARSTRIP_INLINE void putAs(Index i)
+    {
+        if (!List)
+            _strips.push_back(i);
+        else
+            put(i);
+    }
+
+    template <bool List> bool clipAs(uint32_t v, uint32_t count)
     {
         if (count < 3)
             return true;
@@ -2725,21 +2748,23 @@ private:
             uint32_t a = n[v].prev, b = n[v].next;
             unlink(v);
             count--;
-            beginStrip(false);
-            put(n[v].index);
+            if (List)
+                beginStrip(false);
+            putAs<List>(n[v].index);
             bool sideA, firstA;
             if (count >= 3 && isEar(a)) {
-                _cw = true;
-                put(n[a].index);
-                put(n[b].index);
+                if (List)
+                    _cw = true;
+                putAs<List>(n[a].index);
+                putAs<List>(n[b].index);
                 sideA = firstA = true;
             } else if (count >= 3 && isEar(b)) {
-                put(n[b].index);
-                put(n[a].index);
+                putAs<List>(n[b].index);
+                putAs<List>(n[a].index);
                 sideA = firstA = false;
             } else {
-                put(n[b].index);
-                put(n[a].index);
+                putAs<List>(n[b].index);
+                putAs<List>(n[a].index);
                 endStrip(false);
                 v = n[b].next;
                 continue;
@@ -2748,12 +2773,12 @@ private:
             while (true) {
                 if (sideA) {
                     const uint32_t z = n[a].prev;
-                    put(n[z].index);
+                    putAs<List>(n[z].index);
                     unlink(a);
                     a = z;
                 } else {
                     const uint32_t z = n[b].next;
-                    put(n[z].index);
+                    putAs<List>(n[z].index);
                     unlink(b);
                     b = z;
                 }
