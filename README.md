@@ -1,12 +1,13 @@
 # earstrip
 
-Polygon triangulation by ear clipping that writes **triangle strips**: a header-only C++17 library and a
-WebAssembly build for JavaScript with the same call as [earcut](https://github.com/mapbox/earcut).
+Polygon triangulation by ear clipping that writes **triangle strips**, with a constrained Delaunay triangulation for
+the polygons ears cannot cut: a header-only C++17 library and a WebAssembly build for JavaScript with the same call
+as [earcut](https://github.com/mapbox/earcut).
 
 It is the triangulator of the [GLMap](https://globus.software) map engine, where it cuts every building, park and
-lake of an offline map on the phone; on the 4.4 million polygons of our test set the library writes exactly the
-strips the engine does. Strips take 1.7 to 2 indices per triangle instead of 3, and earstrip is faster than earcut
-natively and in the browser.
+lake of an offline map on the phone; on the 5.8 million polygons of our test sets the library writes exactly the
+strips the engine does, ears and constrained triangulation alike. Strips take 1.7 to 2 indices per triangle instead
+of 3, and earstrip is faster than earcut natively and in the browser.
 
 ```cpp
 #include "earstrip.hpp"
@@ -39,13 +40,20 @@ const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 3, 3, 7, 3, 7, 7, 3, 7],
   the strip. Convex rings, triangles and quads skip the ear tests.
 - **Holes** are joined to the boundary by Eberly's bridges, rightmost first, with the cases tile grids produce: a
   vertex lying on the ray, a hole touching the outer ring at a vertex or inside an edge.
-- **Broken polygons still get a fill.** When a ring crosses itself the ears run out. earstrip then cuts the
-  polygon again from the start, split at every crossing into loops; it fills each loop that an even-odd fill would,
-  and cuts corners as a last resort. `Status::Approximate` says when that happened, and `setForcedCuts(false)`
-  makes it give up instead (`Status::Refused`), for engines with a fallback of their own.
-- **Exact predicates for integer coordinates within ±2²⁵** (tile grids); other input is handled in double precision
-  like any triangulator. Points can be anything with `.x`/`.y` members, `std::array`, `std::pair`, flat arrays with a
-  stride, or your own `earstrip::point_traits`.
+- **A constrained triangulation for what ears cannot do.** When rings cross or touch, the ears run out; a hole that
+  crosses the boundary cannot be bridged; and past 128 rings bridging gets quadratic, because each bridge scans the
+  boundary. Those polygons go to a constrained Delaunay triangulation of the ring edges (`Status::Constrained`). It
+  fills what lies inside the outer ring by non-zero winding and outside every hole, and reroutes crossing edges
+  through a grid point next to the crossing, which becomes an added point: `extraPoints()` has their coordinates,
+  index `n + k` in the strips is point `k`. `setExtraPoints(false)` keeps every index an input vertex.
+- **And without it** (`setConstrained(false)`, or when added points are not allowed), a polygon whose ears run out
+  is cut again from the start, split at every crossing into loops; earstrip fills each loop that an even-odd fill
+  would and cuts corners as a last resort (`Status::Approximate`). `setForcedCuts(false)` makes it give up instead
+  (`Status::Refused`).
+- **Exact predicates for integer coordinates within ±2²⁵** in the ears (tile grids) and for integers of 32 bits in
+  the constrained triangulation; other input is rounded there to a 2³⁰ grid over the polygon's bounding box. Points
+  can be anything with `.x`/`.y` members, `std::array`, `std::pair`, flat arrays with a stride, or your own
+  `earstrip::point_traits`.
 
 ## Numbers
 
@@ -60,11 +68,23 @@ thread of an Apple M4 Pro, best of 5 to 7 runs.
 | earcut.js 3.2.4, V8 / JSC | | 1,109 / 1,288 ms |
 | Indices per triangle | 1.66 as strips (1.95 at zoom 9), 3 as a list | 3 |
 
-At zoom 9 (683,742 polygons) the native times are 67 ms against 83 ms.
+At zoom 9 (683,742 polygons) the native times are 67 ms against 83 ms. The constrained triangulation, added later,
+covers 82 of the zoom-13 polygons and changes these times within the noise.
 
-On the polygons that are not simple (76 at zoom 13, 152 at zoom 9), measured as the share of pixels where the
-triangles differ from an even-odd fill of the rings on a 128 × 128 grid: earstrip 11% on average and 61% at
-worst at zoom 13, earcut 33% and 483%; at zoom 9, 11% and 100% against 13% and 236%.
+Polygons with many holes, the 56,472 polygons of GLMap's world map tiles, some with up to 11,675 holes (measured on
+a busy machine, so slower than the table above): earstrip 518 ms, earstrip with ears alone 2,100 ms, earcut.hpp
+3,194 ms.
+
+On the polygons the ears cannot cut exactly, the share of pixels where the triangles differ from an even-odd fill of
+the rings on a 128 × 128 grid, on average and at worst:
+
+| | earstrip | earcut.hpp |
+| --- | ---: | ---: |
+| zoom 13, 82 polygons | 0.15%, 2.6% | 31%, 483% |
+| zoom 9, 183 polygons | 0.7%, 24% | 12%, 236% |
+| 1,468 polygons of a map with unrepaired rings | 0.11%, 11% | 4.7%, 848% |
+
+Part of what remains is where non-zero winding fills more than even-odd does, a ring walked twice for example. The WebAssembly module is 70 KB, 27 KB with gzip.
 
 ## Building
 

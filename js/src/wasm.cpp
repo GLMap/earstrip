@@ -45,6 +45,7 @@ EXPORT(grow) void grow(uint32_t count, uint32_t holeCount)
 EXPORT(run) void run(uint32_t vertices, uint32_t dim, uint32_t holeCount)
 {
     triangulator.setTriangleList(true);
+    triangulator.setExtraPoints(false);
     status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
     const auto &list = triangulator.triangleList();
     layout[4] = (uint32_t)(uintptr_t)list.data();
@@ -62,12 +63,14 @@ EXPORT(reserve) double *reserve(uint32_t count, uint32_t holeCount)
 EXPORT(holeBuffer) uint32_t *holeBuffer() { return holes.data(); }
 
 EXPORT(setForcedCuts) void setForcedCuts(uint32_t on) { triangulator.setForcedCuts(on != 0); }
+EXPORT(setConstrained) void setConstrained(uint32_t on) { triangulator.setConstrained(on != 0); }
 EXPORT(lastStatus) uint32_t lastStatus() { return (uint32_t)status; }
 
 // Triangle list of the polygon in the buffers; returns the index count, output() the indices.
 EXPORT(triangulate) uint32_t triangulate(uint32_t vertices, uint32_t dim, uint32_t holeCount)
 {
     triangulator.setTriangleList(true);
+    triangulator.setExtraPoints(false);
     status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
     output = triangulator.triangleList();
     return (uint32_t)output.size();
@@ -75,9 +78,11 @@ EXPORT(triangulate) uint32_t triangulate(uint32_t vertices, uint32_t dim, uint32
 EXPORT(output) const uint32_t *outputBuffer() { return output.data(); }
 
 // Strips of the polygon in the buffers; returns the strip count; stripIndices(), stripEnds() and stripClockwise() follow.
+// The strips may index points added where rings cross: extraPoints() holds their x, y pairs.
 EXPORT(strip) uint32_t strip(uint32_t vertices, uint32_t dim, uint32_t holeCount)
 {
     triangulator.setTriangleList(false);
+    triangulator.setExtraPoints(true);
     status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
     return (uint32_t)triangulator.stripEnds().size();
 }
@@ -85,6 +90,8 @@ EXPORT(stripIndexCount) uint32_t stripIndexCount() { return (uint32_t)triangulat
 EXPORT(stripIndices) const uint32_t *stripIndices() { return triangulator.strips().data(); }
 EXPORT(stripEnds) const uint32_t *stripEnds() { return triangulator.stripEnds().data(); }
 EXPORT(stripClockwise) const uint8_t *stripClockwise() { return triangulator.stripClockwise().data(); }
+EXPORT(extraPointCount) uint32_t extraPointCount() { return (uint32_t)triangulator.extraPoints().size() / 2; }
+EXPORT(extraPoints) const double *extraPoints() { return triangulator.extraPoints().data(); }
 
 // Room for a batch: polygons + 1 vertex starts and hole start offsets; the hole starts themselves go to holeBuffer().
 EXPORT(reserveBatch) uint32_t *reserveBatch(uint32_t polygons)
@@ -103,6 +110,7 @@ EXPORT(triangulateBatch) uint32_t triangulateBatch(uint32_t polygons, uint32_t d
     output.clear();
     offsets.resize(polygons + 1);
     triangulator.setTriangleList(true);
+    triangulator.setExtraPoints(false);
     for (uint32_t k = 0; k < polygons; ++k) {
         offsets[k] = (uint32_t)output.size();
         const uint32_t first = starts[k];

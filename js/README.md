@@ -12,7 +12,7 @@ const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 2, 2, 8, 2, 8, 8, 2, 8],
 ```
 
 The module is inlined and compiles synchronously where the platform allows it; elsewhere `await ready` before the
-first call.
+first call. It is 70 KB, 27 KB with gzip.
 
 ## Triangle strips
 
@@ -39,10 +39,16 @@ One call for a whole tile avoids the per-call cost of crossing into WebAssembly.
 
 ## Polygons that are not simple
 
-`lastStatus()` says how the last polygon was covered: `exact`; `holes-left-out` when a hole could not be joined;
-`approximate` when the boundary crosses itself and the polygon was cut again with its crossings split into loops,
-each filled only if it lies inside the rings by the even-odd rule; `refused` when that was turned off with
-`setForcedCuts(false)`.
+Polygons whose rings cross or touch, with a hole that crosses the boundary or with more than 128 rings go to a
+constrained Delaunay triangulation of the ring edges. It fills what lies inside the outer ring by non-zero winding
+and outside every hole. Where rings cross it adds a point: `strips()` returns those as `points`, x, y pairs, and
+index `n + k` (n input vertices) is point `k`. The earcut-compatible call and `batch()` never add points; such a
+polygon is cut again from the start with its crossings split into loops, each filled only if it lies inside the rings
+by the even-odd rule.
+
+`lastStatus()` says how the last polygon was covered: `exact`; `constrained`; `holes-left-out` when a hole could not
+be joined and the constrained triangulation did no better; `approximate` for the loops; `refused` when those were
+turned off with `setForcedCuts(false)`. `setConstrained(false)` sends everything the ears cannot finish to the loops.
 
 ## Speed
 

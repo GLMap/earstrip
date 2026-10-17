@@ -2,7 +2,7 @@
 // Input "PLY1": u32 magic, u32 polygons, u32 rings, u32 points, u32 polyRingStart[polygons + 1],
 // u32 ringPointStart[rings + 1], i16 xy[2 * points], then optionally u32 resultHash[polygons] (FNV-1a of the
 // expected strips with forced cuts off, see hashOf) that --check compares against.
-// Usage: bench <file.bin> [-r repeats] [--check]
+// Usage: bench <file.bin> [-r repeats] [--check] [--no-constrained]
 #include "earstrip.hpp"
 #include <chrono>
 #include <cstdio>
@@ -66,7 +66,7 @@ template <class T> static uint32_t hashOf(const T &t, earstrip::Status s)
 
 // What a renderer would show wrong: on a 128 x 128 grid over the polygon, the pixels where the union of the triangles
 // differs from the even-odd fill of the rings, relative to the pixels the rings fill.
-static double pixelError(const Polygon &poly, const std::vector<uint32_t> &tris)
+static double pixelError(const Polygon &poly, const std::vector<uint32_t> &tris, const std::vector<double> &extra = {})
 {
     std::vector<Pt> all;
     double minX = 1e30, minY = 1e30, maxX = -1e30, maxY = -1e30;
@@ -79,6 +79,8 @@ static double pixelError(const Polygon &poly, const std::vector<uint32_t> &tris)
             minY = std::min(minY, (double)q.y);
             maxY = std::max(maxY, (double)q.y);
         }
+    for (size_t k = 0; k + 1 < extra.size(); k += 2)
+        all.push_back({(decltype(Pt::x))extra[k], (decltype(Pt::y))extra[k + 1]});
     const int grid = 128;
     const double sx = (maxX - minX) / grid, sy = (maxY - minY) / grid;
     size_t filled = 0, wrong = 0;
@@ -112,16 +114,18 @@ static double pixelError(const Polygon &poly, const std::vector<uint32_t> &tris)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: bench <file.bin> [-r repeats] [--check]\n");
+        fprintf(stderr, "usage: bench <file.bin> [-r repeats] [--check] [--no-constrained]\n");
         return 2;
     }
     int repeats = 5;
-    bool check = false;
+    bool check = false, constrained = true;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "-r") && i + 1 < argc)
             repeats = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--check"))
             check = true;
+        else if (!strcmp(argv[i], "--no-constrained"))
+            constrained = false;
     }
     FILE *f = fopen(argv[1], "rb");
     if (!f) {
@@ -153,16 +157,20 @@ int main(int argc, char **argv)
             fprintf(stderr, "--check: the file has no result hashes\n");
             return 2;
         }
+        // the hashes are of the ears alone
         strip.setForcedCuts(false);
+        strip.setConstrained(false);
         uint32_t mismatches = 0;
         for (uint32_t p = 0; p < polys; ++p)
             mismatches += hashOf(strip, strip.run(polygons[p])) != hashes[p];
         printf("check: %u of %u polygons differ from the expected strips\n", mismatches, polys);
         strip.setForcedCuts(true);
+        strip.setConstrained(true);
         if (mismatches)
             return 1;
     }
 
+    strip.setConstrained(constrained);
     size_t sink = 0;
     auto runStrip = [&] {
         const auto s = Clock::now();
@@ -192,7 +200,7 @@ int main(int argc, char **argv)
     }
 
     // what each one makes of the polygons the ears cannot cut exactly
-    size_t exact = 0, holes = 0, approximate = 0, triangles = 0, indices = 0, strips = 0;
+    size_t exact = 0, holes = 0, approximate = 0, covered = 0, added = 0, triangles = 0, indices = 0, strips = 0;
     double devStrip = 0, devEarcut = 0, worstStrip = 0, worstEarcut = 0;
     size_t stripBetter = 0, earcutBetter = 0;
     std::vector<uint32_t> tris;
@@ -205,11 +213,13 @@ int main(int argc, char **argv)
         std::vector<uint16_t> t16;
         strip.triangles(t16);
         triangles += t16.size() / 3;
-        if (s != earstrip::Status::Approximate)
+        if (s != earstrip::Status::Approximate && s != earstrip::Status::Constrained)
             continue;
-        approximate++;
+        approximate += s == earstrip::Status::Approximate;
+        covered += s == earstrip::Status::Constrained;
+        added += strip.extraPoints().size() / 2;
         tris.assign(t16.begin(), t16.end());
-        const double ds = pixelError(p, tris);
+        const double ds = pixelError(p, tris, strip.extraPoints());
         devStrip += ds;
         worstStrip = std::max(worstStrip, ds);
 #ifdef WITH_EARCUT
@@ -224,11 +234,12 @@ int main(int argc, char **argv)
     }
     printf("earstrip:   best of %d %.1f ms; %zu triangles, %.3f indices per triangle in %zu strips\n", repeats, bestStrip, triangles,
         (double)indices / std::max<size_t>(triangles, 1), strips);
-    printf("            exact %zu, holes left out %zu, approximate %zu (wrong pixels: mean %.4f, worst %.4f)\n", exact, holes, approximate,
-        approximate ? devStrip / approximate : 0.0, worstStrip);
+    const size_t hard = approximate + covered;
+    printf("            exact %zu, holes left out %zu, constrained %zu with %zu added points, approximate %zu\n", exact, holes, covered, added, approximate);
+    printf("            on those %zu, wrong pixels against the even-odd fill: mean %.4f, worst %.4f\n", hard, hard ? devStrip / hard : 0.0, worstStrip);
 #ifdef WITH_EARCUT
-    printf("earcut.hpp: best of %d %.1f ms; on the approximate ones wrong pixels mean %.4f, worst %.4f; closer: earstrip %zu, earcut %zu\n", repeats,
-        bestEarcut, approximate ? devEarcut / approximate : 0.0, worstEarcut, stripBetter, earcutBetter);
+    printf("earcut.hpp: best of %d %.1f ms; on the same polygons wrong pixels mean %.4f, worst %.4f; closer: earstrip %zu, earcut %zu\n", repeats,
+        bestEarcut, hard ? devEarcut / hard : 0.0, worstEarcut, stripBetter, earcutBetter);
 #endif
     return sink == 42 ? 3 : 0;
 }

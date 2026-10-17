@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 [ -n "$EMSDK" ] && source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
 mkdir -p dist
-em++ -O3 -std=c++17 -I../include -fno-exceptions -fno-rtti -flto \
+em++ -O3 -std=c++17 -I../include -DEARSTRIP_SMALL_CONSTRAINED -DNDEBUG -fno-exceptions -fno-rtti -flto \
   -sSTANDALONE_WASM --no-entry -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=4MB -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=256KB \
   -sMALLOC=emmalloc -sFILESYSTEM=0 \
   src/wasm.cpp -o dist/earstrip.wasm

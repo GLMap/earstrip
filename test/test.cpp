@@ -22,10 +22,14 @@ using Rings = std::vector<std::vector<Pt>>;
 
 constexpr double Pi = 3.14159265358979323846;
 
-// Forced cuts off: invalid input is refused, so these cases see exactly what the ears do.
+// Ears only, forced cuts off: invalid input is refused, so these cases see exactly what the ears do.
 struct Clipper {
     earstrip::Triangulator<uint32_t> t;
-    Clipper() { t.setForcedCuts(false); }
+    Clipper()
+    {
+        t.setForcedCuts(false);
+        t.setConstrained(false);
+    }
     bool run(const Rings &rings) { return t.run(rings) != earstrip::Status::Refused; }
     bool droppedHoles() const { return t.holesLeftOut(); }
     const std::vector<uint32_t> &getStrips() const { return t.strips(); }
@@ -742,6 +746,174 @@ static Rings gridHoles(std::mt19937 &rng)
     return rings;
 }
 
+
+// Doubled area the triangles cover, over the input points and the added ones; false on a bad index, a flat triangle or a
+// strip whose triangles turn different ways.
+template <class Index> static bool cover(const earstrip::Triangulator<Index> &t, const std::vector<std::array<double, 2>> &points, double &area, std::string &why)
+{
+    std::vector<std::array<double, 2>> all(points);
+    for (size_t k = 0; k + 1 < t.extraPoints().size(); k += 2)
+        all.push_back({t.extraPoints()[k], t.extraPoints()[k + 1]});
+    area = 0;
+    uint32_t start = 0;
+    for (size_t s = 0; s < t.stripEnds().size(); ++s) {
+        const uint32_t end = t.stripEnds()[s];
+        if (end < start + 3) {
+            why = "strip shorter than a triangle";
+            return false;
+        }
+        for (uint32_t k = start; k + 2 < end; ++k) {
+            const auto &idx = t.strips();
+            if (idx[k] >= all.size() || idx[k + 1] >= all.size() || idx[k + 2] >= all.size()) {
+                why = "index out of range";
+                return false;
+            }
+            const auto a = all[idx[k]], b = all[idx[k + 1]], c = all[idx[k + 2]];
+            double cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if ((((k - start) & 1) != 0) != (t.stripClockwise()[s] != 0))
+                cr = -cr;
+            if (cr <= 0) {
+                why = cr == 0 ? "flat triangle" : "triangle against the strip's winding";
+                return false;
+            }
+            area += cr;
+        }
+        start = end;
+    }
+    return true;
+}
+
+// The constrained triangulation: what it covers (inside ring 0 by non-zero winding, outside every hole), the points it
+// adds at crossings, and when it is used.
+static void constrainedTests()
+{
+    using P = std::array<double, 2>;
+    using Poly = std::vector<std::vector<P>>;
+    int bad = 0;
+    auto expect = [&](const char *name, const Poly &poly, earstrip::Status status, double area2, size_t extra, double tolerance = 0) {
+        earstrip::Triangulator<uint32_t> t;
+        const auto s = t.run(poly);
+        std::vector<P> points;
+        for (const auto &r : poly)
+            points.insert(points.end(), r.begin(), r.end());
+        double area = 0;
+        std::string why;
+        bool good = cover(t, points, area, why);
+        if (good && s != status)
+            why = "status " + std::to_string((int)s);
+        else if (good && std::abs(area - area2) > tolerance)
+            why = "area " + std::to_string(area / 2) + " expected " + std::to_string(area2 / 2);
+        else if (good && t.extraPoints().size() != 2 * extra)
+            why = std::to_string(t.extraPoints().size() / 2) + " added points, expected " + std::to_string(extra);
+        good = why.empty();
+        printf("%-38s %s  %s\n", name, good ? "PASS" : "FAIL", why.c_str());
+        bad += !good;
+        return t.extraPoints();
+    };
+    const auto bowTie = expect("constrained: bow tie", Poly{{{0, 0}, {10, 10}, {10, 0}, {0, 10}}}, earstrip::Status::Constrained, 100, 1);
+    if (bowTie.size() != 2 || bowTie[0] != 5 || bowTie[1] != 5) {
+        printf("%-38s FAIL  crossing not at (5, 5)\n", "constrained: bow tie crossing");
+        bad++;
+    }
+    expect("constrained: square walked twice", Poly{{{0, 0}, {10, 0}, {10, 10}, {0, 10}, {0, 0}, {10, 0}, {10, 10}, {0, 10}}}, earstrip::Status::Constrained, 200, 0);
+    expect("constrained: hole outside", Poly{{{0, 0}, {10, 0}, {10, 10}, {0, 10}}, {{20, 0}, {24, 0}, {24, 4}, {20, 4}}}, earstrip::Status::Constrained, 200, 0);
+    // a pentagram: its centre pentagon has winding 2 and stays filled, so the cover is the star's outline through the five
+    // added crossings
+    {
+        Poly star(1);
+        for (int k = 0; k < 5; ++k) {
+            const double a = Pi / 2 + 4 * Pi * k / 5;
+            star[0].push_back({std::round(1000 * std::cos(a)), std::round(1000 * std::sin(a))});
+        }
+        earstrip::Triangulator<uint32_t> t;
+        const auto s = t.run(star);
+        double area = 0, outline = 0;
+        std::string why;
+        bool good = cover(t, star[0], area, why) && s == earstrip::Status::Constrained && t.extraPoints().size() == 10;
+        if (good) {
+            std::vector<P> ring(star[0]);
+            for (size_t k = 0; k < 10; k += 2)
+                ring.push_back({t.extraPoints()[k], t.extraPoints()[k + 1]});
+            std::sort(ring.begin(), ring.end(), [](const P &a, const P &b) { return std::atan2(a[1], a[0]) < std::atan2(b[1], b[0]); });
+            for (size_t i = 0; i < ring.size(); ++i) {
+                const P p = ring[i], q = ring[(i + 1) % ring.size()];
+                outline += p[0] * q[1] - q[0] * p[1];
+            }
+            good = std::abs(area - outline) < 1e-6;
+        }
+        printf("%-38s %s  %s area %.0f, outline %.0f\n", "constrained: pentagram", good ? "PASS" : "FAIL", why.c_str(), area / 2, outline / 2);
+        bad += !good;
+    }
+    // 200 holes: past 128 rings the ears are skipped
+    {
+        Poly grid(1);
+        grid[0] = {{0, 0}, {410, 0}, {410, 210}, {0, 210}};
+        double area2 = 2.0 * 410 * 210;
+        for (int i = 0; i < 20; ++i)
+            for (int j = 0; j < 10; ++j) {
+                const double x = 10 + 20 * i, y = 10 + 20 * j;
+                grid.push_back({{x, y}, {x, y + 10}, {x + 10, y + 10}, {x + 10, y}});
+                area2 -= 200;
+            }
+        expect("constrained: 200 holes", grid, earstrip::Status::Constrained, area2, 0);
+        earstrip::Triangulator<uint32_t> ears;
+        ears.setConstrained(false);
+        const bool good = ears.run(grid) == earstrip::Status::Exact;
+        printf("%-38s %s\n", "ears alone: 200 holes", good ? "PASS" : "FAIL");
+        bad += !good;
+    }
+    // lon/lat: rounded to the grid, the crossing comes back within a grid step
+    {
+        const Poly poly{{{21.0, 52.2}, {21.01, 52.21}, {21.01, 52.2}, {21.0, 52.21}}};
+        const auto extra = expect("constrained: lon/lat bow tie", poly, earstrip::Status::Constrained, 1e-4, 1, 1e-12);
+        const bool good = extra.size() == 2 && std::abs(extra[0] - 21.005) < 1e-9 && std::abs(extra[1] - 52.205) < 1e-9;
+        printf("%-38s %s\n", "constrained: lon/lat crossing", good ? "PASS" : "FAIL");
+        bad += !good;
+    }
+    // added points refused: the bow tie goes the ears' way and every index is an input vertex
+    {
+        earstrip::Triangulator<uint32_t> t;
+        t.setExtraPoints(false);
+        const auto s = t.run(Poly{{{0, 0}, {10, 10}, {10, 0}, {0, 10}}});
+        bool good = s == earstrip::Status::Approximate && t.extraPoints().empty();
+        for (uint32_t i : t.strips())
+            good &= i < 4;
+        printf("%-38s %s\n", "constrained: no added points allowed", good ? "PASS" : "FAIL");
+        bad += !good;
+    }
+    // list mode gives what triangles() makes of the strips, for constrained polygons too
+    {
+        const Poly polys[] = {{{{0, 0}, {10, 10}, {10, 0}, {0, 10}}}, {{{0, 0}, {20, 20}, {20, 0}, {0, 10}}}};
+        earstrip::Triangulator<uint32_t> strips, list;
+        list.setTriangleList(true);
+        std::vector<uint32_t> tris;
+        bool good = true;
+        for (const Poly &poly : polys) {
+            strips.run(poly);
+            strips.triangles(tris);
+            good &= list.run(poly) == earstrip::Status::Constrained && tris == list.triangleList();
+        }
+        printf("%-38s %s\n", "constrained: triangle list mode", good ? "PASS" : "FAIL");
+        bad += !good;
+    }
+    // more points than uint16_t can index: the constrained triangulation stays out
+    {
+        Poly big(1);
+        for (int k = 0; k < 70000; ++k) {
+            const double a = 2 * Pi * k / 70000;
+            big[0].push_back({std::round(1e6 * std::cos(a)), std::round(1e6 * std::sin(a))});
+        }
+        big[0].push_back({0, 0});
+        big[0].push_back({2e6, 1});
+        earstrip::Triangulator<uint16_t> t;
+        const auto s = t.run(big);
+        const bool good = s != earstrip::Status::Constrained && t.extraPoints().empty();
+        printf("%-38s %s  status %d\n", "constrained: past the index range", good ? "PASS" : "FAIL", (int)s);
+        bad += !good;
+    }
+    failures += bad;
+}
+
 int main()
 {
     const std::vector<Pt> square = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
@@ -902,9 +1074,11 @@ int main()
     printf("%-38s %s  %d polygons, %d failed\n", "random star polygons with holes", randomFailures ? "FAIL" : "PASS", randomCount, randomFailures);
 
 
-    // Forced cuts (the default): invalid rings still give a triangle per vertex beyond two, never a refusal.
+    // Forced cuts (the default without the constrained triangulation): invalid rings still give a triangle per vertex
+    // beyond two, never a refusal.
     {
         earstrip::Triangulator<uint32_t> t;
+        t.setConstrained(false);
         int forcedFailures = 0;
         const Rings invalid[] = {
             {{{0, 0}, {10, 10}, {10, 0}, {0, 10}}},
@@ -1018,6 +1192,8 @@ int main()
         windingFailures += listFailures;
         failures += windingFailures != 0;
     }
+
+    constrainedTests();
 
     printf("%s: %d failures\n", failures ? "FAILED" : "OK", failures);
     return failures ? 1 : 0;

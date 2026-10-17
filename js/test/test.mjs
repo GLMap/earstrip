@@ -2,7 +2,7 @@
 // native results on every polygon of it.
 // Usage: node test/test.mjs [polygons.bin]
 import { readFileSync } from 'node:fs';
-import earstrip, { batch, flatten, lastStatus, setForcedCuts, strips } from '../earstrip.js';
+import earstrip, { batch, flatten, lastStatus, setConstrained, setForcedCuts, strips } from '../earstrip.js';
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -40,6 +40,22 @@ check('bow tie without forced cuts: refused', lastStatus() === 'refused');
 setForcedCuts(true);
 const s = strips(withHole, [4]);
 check('strips', s.ends.length > 0 && s.ends[s.ends.length - 1] === s.indices.length);
+setForcedCuts(true);
+// strips() lets the constrained triangulation add the crossing point; the earcut-compatible call does not
+const bs = strips(bowTie);
+check('bow tie strips: constrained, crossing added', lastStatus() === 'constrained' && bs.points.length === 2 && bs.points[0] === 5 && bs.points[1] === 5);
+t = earstrip(bowTie);
+check('bow tie triangles: input vertices only', lastStatus() !== 'constrained' && t.every((i) => i < 4));
+// past 128 rings the ears are skipped
+const grid = [0, 0, 410, 0, 410, 210, 0, 210], gridHoles = [];
+for (let i = 0; i < 20; ++i)
+    for (let j = 0; j < 10; ++j) {
+        const x = 10 + 20 * i, y = 10 + 20 * j;
+        gridHoles.push(grid.length / 2);
+        grid.push(x, y, x, y + 10, x + 10, y + 10, x + 10, y);
+    }
+t = earstrip(grid, gridHoles);
+check('200 holes: constrained', lastStatus() === 'constrained' && area(grid, t) === 410 * 210 - 200 * 100);
 const f = flatten([[[0, 0], [10, 0], [10, 10], [0, 10]], [[3, 3], [7, 3], [7, 7], [3, 7]]]);
 check('flatten', earstrip(f.vertices, f.holes, f.dimensions).length === 24);
 const b = batch(new Float64Array([...square, ...withHole]), new Uint32Array([0, 4, 12]), new Uint32Array([4]), new Uint32Array([0, 0, 1]));
@@ -53,7 +69,7 @@ const s0 = performance.now();
 t = earstrip(lonlat);
 check('20,000 lon/lat vertices', t.length === 3 * 19998, `${(performance.now() - s0).toFixed(1)} ms`);
 
-// Every polygon of a PLY1 file against the native hashes, forced cuts off as in the file.
+// Every polygon of a PLY1 file against the native hashes of the ears alone, forced cuts off as in the file.
 if (process.argv[2]) {
     const buf = readFileSync(process.argv[2]);
     const ab = buf.buffer, base = buf.byteOffset;
@@ -68,6 +84,7 @@ if (process.argv[2]) {
         return h;
     };
     setForcedCuts(false);
+    setConstrained(false);
     let mismatches = 0;
     for (let p = 0; p < P; ++p) {
         const r0 = prs[p], r1 = prs[p + 1], v0 = rps[r0];
