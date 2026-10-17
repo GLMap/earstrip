@@ -181,10 +181,13 @@ private:
         double x, y;
         uint32_t prev, next;
         Index index;
-        uint8_t reflex;  // corner is not strictly convex
-        uint8_t indexed; // listed in the blocker index
-        uint16_t ring;   // 0 outer, holes from 1
-        uint8_t shared;  // another ring has a vertex at this position
+        uint8_t reflex; // corner is not strictly convex
+        // Joining rings uses shared; classification then initializes indexed for clipping.
+        union {
+            uint8_t shared;  // another ring has a vertex at this position
+            uint8_t indexed; // listed in the blocker index
+        };
+        uint16_t ring; // 0 outer, holes from 1
     };
 
     struct Item {

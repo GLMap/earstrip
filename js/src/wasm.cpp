@@ -107,8 +107,11 @@ EXPORT(triangulateBatch) uint32_t triangulateBatch(uint32_t polygons, uint32_t d
         offsets[k] = (uint32_t)output.size();
         const uint32_t first = starts[k];
         triangulator.run(coords.data() + (size_t)first * dim, starts[k + 1] - first, dim, holes.data() + holeStarts[k], holeStarts[k + 1] - holeStarts[k]);
-        for (uint32_t i : triangulator.triangleList())
-            output.push_back(first + i);
+        const auto &list = triangulator.triangleList();
+        const size_t begin = output.size();
+        output.resize(begin + list.size());
+        for (size_t i = 0; i < list.size(); ++i)
+            output[begin + i] = first + list[i];
     }
     offsets[polygons] = (uint32_t)output.size();
     return (uint32_t)output.size();
