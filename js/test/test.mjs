@@ -73,7 +73,7 @@ t = earstrip(lonlat);
 check('20,000 lon/lat vertices', t.length === 3 * 19998, `${(performance.now() - s0).toFixed(1)} ms`);
 
 // The direct calls give what the copying calls give; restart buffers decode to the same counter-clockwise triangles.
-function decodeRestart(buffer, coords) {
+function decodeRestart(buffer) {
     const tris = [];
     let start = 0;
     for (let i = 0; i <= buffer.length; ++i) {
@@ -91,22 +91,23 @@ const key = (t) => [...t].sort((x, y) => x - y).join(',');
 function sameDirect(name, data, holeList) {
     const n = data.length / 2, h = holeList.length;
     const easyTriangles = earstrip(data, holeList), easyStrips = strips(data, holeList);
-    let input = direct.input(n, h);
-    input.coords.set(data);
-    input.holes.set(holeList);
-    const tri = Array.from(direct.triangles(n, h));
-    input = direct.input(n, h);
-    input.coords.set(data);
-    input.holes.set(holeList);
-    const st = direct.strips(n, h);
+    const write = () => {
+        const input = direct.input(n, h);
+        input.coords.set(data);
+        input.holes.set(holeList);
+    };
     const same = (a, b) => a.length === b.length && Array.prototype.every.call(a, (v, i) => v === b[i]);
+    write();
+    const tri = Array.from(direct.run(n, h, 'triangles').indices);
+    write();
+    const st = direct.run(n, h, 'strips');
     let good = same(tri, easyTriangles) && same(st.indices, easyStrips.indices) && same(st.ends, easyStrips.ends) &&
         same(st.clockwise, easyStrips.clockwise) && same(st.points, easyStrips.points);
     const all = [...data, ...easyStrips.points];
-    input = direct.input(n, h);
-    input.coords.set(data);
-    input.holes.set(holeList);
-    const decoded = decodeRestart(Array.from(direct.restart(n, h)), all);
+    write();
+    const r = direct.run(n, h);
+    const decoded = decodeRestart(Array.from(r.u32.subarray(r.indexStart, r.indexStart + r.indexCount)));
+    good = good && same(r.points, easyStrips.points);
     const fromStrips = [];
     for (let s = 0, begin = 0; s < easyStrips.ends.length; begin = easyStrips.ends[s++])
         for (let k = begin; k + 2 < easyStrips.ends[s]; ++k) fromStrips.push([easyStrips.indices[k], easyStrips.indices[k + 1], easyStrips.indices[k + 2]]);
@@ -154,6 +155,26 @@ sameDirect('lon/lat ring', lonlat, []);
     check('direct: batch, triangles and restart', good);
 }
 
+// The input views follow the buffers when other calls move them.
+{
+    const square = [0, 0, 10, 0, 10, 10, 0, 10];
+    const big = [];
+    for (let i = 0; i < 200000; ++i) big.push(Math.cos(i / 200000 * 2 * Math.PI) * 1e4, Math.sin(i / 200000 * 2 * Math.PI) * 1e4);
+    const triangulate = () => {
+        direct.input(4).coords.set(square);
+        return Array.from(direct.run(4, 0, 'triangles').indices).join();
+    };
+    const expected = earstrip(square).join();
+    let good = triangulate() === expected;
+    earstrip(big);
+    good = good && triangulate() === expected;
+    strips(big);
+    good = good && triangulate() === expected;
+    shrink();
+    good = good && triangulate() === expected;
+    check('direct: input after other calls move the buffers', good);
+}
+
 // Every polygon of a PLY1 file against the native hashes of the ears alone, forced cuts off as in the file.
 if (process.argv[2]) {
     const buf = readFileSync(process.argv[2]);
@@ -186,7 +207,48 @@ if (process.argv[2]) {
         mismatches += h !== hashes[p];
     }
     setForcedCuts(true);
+    setConstrained(true);
     check(`${P} polygons against the native results`, mismatches === 0, `${mismatches} differ`);
+
+    // the direct calls give what the copying calls give, polygon by polygon
+    const hash = (h, a, from = 0, to = a.length) => {
+        for (let i = from; i < to; ++i) h = fnv(h, a[i]);
+        return h;
+    };
+    let differ = 0;
+    for (let p = 0; p < P; ++p) {
+        const r0 = prs[p], r1 = prs[p + 1], v0 = rps[r0], n = rps[r1] - v0, h = r1 - r0 - 1;
+        const data = xy.subarray(2 * v0, 2 * rps[r1]);
+        const holes = [];
+        for (let r = r0 + 1; r < r1; ++r) holes.push(rps[r] - v0);
+        const write = () => {
+            const input = direct.input(n, h);
+            input.coords.set(data);
+            input.holes.set(holes);
+        };
+        const list = earstrip(data, holes), st = strips(data, holes);
+        write();
+        let r = direct.run(n, h, 'triangles');
+        let good = hash(0, r.u32, r.indexStart, r.indexStart + r.indexCount) === hash(0, list);
+        write();
+        r = direct.run(n, h, 'strips');
+        good = good && hash(0, r.u32, r.indexStart, r.indexStart + r.indexCount) === hash(0, st.indices) &&
+            hash(0, r.u32, r.endsStart, r.endsStart + r.stripCount) === hash(0, st.ends) &&
+            hash(0, r.u8, r.clockwiseStart, r.clockwiseStart + r.stripCount) === hash(0, st.clockwise) &&
+            hash(0, r.f64.subarray(r.pointsStart, r.pointsStart + 2 * r.pointCount)) === hash(0, st.points);
+        // the restart buffer, made here from the strips
+        let expected = 0;
+        for (let s = 0, begin = 0; s < st.ends.length; begin = st.ends[s++]) {
+            if (s) expected = fnv(expected, 0xffffffff);
+            if (st.clockwise[s]) expected = fnv(expected, st.indices[begin]);
+            expected = hash(expected, st.indices, begin, st.ends[s]);
+        }
+        write();
+        r = direct.run(n, h, 'restart');
+        good = good && hash(0, r.u32, r.indexStart, r.indexStart + r.indexCount) === expected;
+        differ += !good;
+    }
+    check(`${P} polygons, direct calls against the copying calls`, differ === 0, `${differ} differ`);
 }
 
 console.log(failures ? `FAILED: ${failures}` : 'OK');

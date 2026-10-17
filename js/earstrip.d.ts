@@ -26,20 +26,33 @@ declare namespace earstrip {
     const ready: Promise<void>;
 }
 
-/** The direct calls: write into the module's memory, read results there, no copies. Views stay valid until the next
- * earstrip call; slice what you keep. */
+/** The result of direct.run(): offsets into views of the whole module memory; the getters make views of the parts. */
+interface DirectResult {
+    u32: Uint32Array;
+    u8: Uint8Array;
+    f64: Float64Array;
+    indexStart: number;
+    indexCount: number;
+    endsStart: number;
+    stripCount: number;
+    clockwiseStart: number;
+    pointsStart: number;
+    pointCount: number;
+    readonly indices: Uint32Array;
+    readonly ends: Uint32Array;
+    readonly clockwise: Uint8Array;
+    readonly points: Float64Array;
+}
+
+/** The direct calls: write into the module's memory, read results there; no copies, no allocation per polygon.
+ * Views and the result stay valid until the next earstrip call. */
 declare const direct: {
-    /** Room for the polygon: write coordinates (dim per vertex) and hole starts into these views. */
+    /** Views spanning the input buffers; write coordinates (dim per vertex) and hole starts at their start. */
     input(vertexCount: number, holeCount?: number, dim?: number): { coords: Float64Array; holes: Uint32Array };
-    /** Strips of the polygon in the input, as views. */
-    strips(vertexCount: number, holeCount?: number, dim?: number): { indices: Uint32Array; ends: Uint32Array; clockwise: Uint8Array; points: Float64Array };
-    /** One TRIANGLE_STRIP index buffer with 0xFFFFFFFF primitive restarts; every triangle counter-clockwise. */
-    restart(vertexCount: number, holeCount?: number, dim?: number): Uint32Array;
-    /** The triangle list; every index is an input vertex. */
-    triangles(vertexCount: number, holeCount?: number, dim?: number): Uint32Array;
-    /** x, y pairs of the points the last strips() or restart() added. */
-    extraPoints(): Float64Array;
-    /** Room for a batch, as batch() takes it. */
+    /** Triangulates the input: 'restart' (default) one TRIANGLE_STRIP buffer with 0xFFFFFFFF restarts, 'strips', or
+     * 'triangles' (input vertices only). */
+    run(vertexCount: number, holeCount?: number, mode?: 'restart' | 'strips' | 'triangles', dim?: number): DirectResult;
+    /** Views to write a batch into, as batch() takes it. */
     batchInput(polygons: number, vertexCount: number, holeCount?: number, dim?: number): { coords: Float64Array; holes: Uint32Array; polygonStarts: Uint32Array; holeStarts: Uint32Array };
     /** Every polygon of the batch input as a triangle list or one restart index buffer. */
     batch(polygons: number, dim?: number, output?: 'triangles' | 'restart'): { indices: Uint32Array; offsets: Uint32Array };

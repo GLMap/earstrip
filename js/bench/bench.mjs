@@ -52,21 +52,21 @@ const runs = {
         return sink;
     },
     'earstrip.batch, one call for all': () => batch(all, polygonStarts, holeArray, holeStarts).indices.length,
-    'direct.triangles, one call per polygon': () => perPolygon((n, h) => direct.triangles(n, h).length),
-    'direct.strips, one call per polygon': () => perPolygon((n, h) => direct.strips(n, h).indices.length),
-    'direct.restart, one call per polygon': () => perPolygon((n, h) => direct.restart(n, h).length),
+    'direct.run, triangles': () => perPolygon('triangles'),
+    'direct.run, strips': () => perPolygon('strips'),
+    'direct.run, restart': () => perPolygon('restart'),
     'direct.batch, triangles': () => directBatch('triangles'),
     'direct.batch, restart': () => directBatch('restart'),
 };
 // the direct calls: each polygon written straight into the module's memory, results read as views
-function perPolygon(run) {
+function perPolygon(mode) {
     let sink = 0;
     for (let p = 0; p < P; ++p) {
         const n = data[p].length >> 1, h = holes[p] ? holes[p].length : 0;
         const input = direct.input(n, h);
         input.coords.set(data[p]);
         if (h) input.holes.set(holes[p]);
-        sink += run(n, h);
+        sink += direct.run(n, h, mode).indexCount;
     }
     return sink;
 }

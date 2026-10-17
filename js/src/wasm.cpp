@@ -6,12 +6,23 @@
 
 static earstrip::Triangulator<uint32_t> triangulator;
 static std::vector<double> coords;
-static std::vector<uint32_t> holes, starts, holeStarts, output, offsets;
+// Leaves the elements a resize adds uninitialized: the output is written right after it grows.
+template <class T> struct Uninitialized : std::allocator<T> {
+    template <class U> struct rebind { using other = Uninitialized<U>; };
+    Uninitialized() = default;
+    template <class U> Uninitialized(const Uninitialized<U> &) {}
+    template <class U> void construct(U *) {}
+    template <class U, class... A> void construct(U *p, A &&...a) { ::new ((void *)p) U(std::forward<A>(a)...); }
+};
+
+static std::vector<uint32_t> holes, starts, holeStarts, offsets;
+static std::vector<uint32_t, Uninitialized<uint32_t>> output;
 static earstrip::Status status;
 
-// Where the fast path finds its buffers: coordinates, their capacity, hole starts, their capacity, output, its size.
+// Where the fast path finds its buffers: coordinates, their capacity, hole starts, their capacity, output, its size;
+// for runDirect() also the strip ends, their count, the strips' windings, the added points and their count.
 // JavaScript reads it after every call that may move them, so that a polygon costs a single call.
-static uint32_t layout[6];
+static uint32_t layout[11];
 
 static void publish()
 {
@@ -69,8 +80,9 @@ EXPORT(setConstrained) void setConstrained(uint32_t on) { triangulator.setConstr
 EXPORT(shrink) void shrink()
 {
     triangulator.shrink();
-    for (auto *v : {&holes, &starts, &holeStarts, &output, &offsets})
+    for (auto *v : {&holes, &starts, &holeStarts, &offsets})
         std::vector<uint32_t>().swap(*v);
+    decltype(output)().swap(output);
     std::vector<double>().swap(coords);
     publish();
 }
@@ -82,7 +94,8 @@ EXPORT(triangulate) uint32_t triangulate(uint32_t vertices, uint32_t dim, uint32
     triangulator.setTriangleList(true);
     triangulator.setExtraPoints(false);
     status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
-    output = triangulator.triangleList();
+    const auto &list = triangulator.triangleList();
+    output.assign(list.begin(), list.end());
     return (uint32_t)output.size();
 }
 EXPORT(output) const uint32_t *outputBuffer() { return output.data(); }
@@ -109,16 +122,22 @@ static void appendRestart(uint32_t first)
     const auto &strips = triangulator.strips();
     const auto &ends = triangulator.stripEnds();
     const auto &cw = triangulator.stripClockwise();
+    // at most a restart and a doubled first index per strip
+    size_t at = output.size();
+    output.resize(at + strips.size() + 2 * ends.size());
+    uint32_t *out = output.data();
+    const uint32_t *in = strips.data();
     uint32_t begin = 0;
     for (size_t k = 0; k < ends.size(); ++k) {
-        if (!output.empty())
-            output.push_back(UINT32_MAX);
+        if (at)
+            out[at++] = UINT32_MAX;
         if (cw[k])
-            output.push_back(first + strips[begin]);
+            out[at++] = first + in[begin];
         for (uint32_t i = begin; i < ends[k]; ++i)
-            output.push_back(first + strips[i]);
+            out[at++] = first + in[i];
         begin = ends[k];
     }
+    output.resize(at);
 }
 
 // The polygon in the buffers as one restart index buffer; returns its length, output() the indices. Added points
@@ -133,6 +152,33 @@ EXPORT(restart) uint32_t restart(uint32_t vertices, uint32_t dim, uint32_t holeC
     return (uint32_t)output.size();
 }
 EXPORT(extraPoints) const double *extraPoints() { return triangulator.extraPoints().data(); }
+
+// One polygon of the direct calls in a single call: mode 0 a triangle list (input vertices only), 1 strips, 2 one
+// restart index buffer (both may add points). Publishes the results in the layout.
+EXPORT(runDirect) void runDirect(uint32_t vertices, uint32_t dim, uint32_t holeCount, uint32_t mode)
+{
+    triangulator.setTriangleList(mode == 0);
+    triangulator.setExtraPoints(mode != 0);
+    status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
+    const uint32_t *indices = triangulator.triangleList().data();
+    size_t count = triangulator.triangleList().size();
+    if (mode == 1) {
+        indices = triangulator.strips().data();
+        count = triangulator.strips().size();
+    } else if (mode == 2) {
+        output.clear();
+        appendRestart(0);
+        indices = output.data();
+        count = output.size();
+    }
+    layout[4] = (uint32_t)(uintptr_t)indices;
+    layout[5] = (uint32_t)count;
+    layout[6] = (uint32_t)(uintptr_t)triangulator.stripEnds().data();
+    layout[7] = (uint32_t)triangulator.stripEnds().size();
+    layout[8] = (uint32_t)(uintptr_t)triangulator.stripClockwise().data();
+    layout[9] = (uint32_t)(uintptr_t)triangulator.extraPoints().data();
+    layout[10] = (uint32_t)triangulator.extraPoints().size() / 2;
+}
 
 // Room for a batch of the given sizes in one go: count coordinates, holeCount hole starts, polygons + 1 vertex starts
 // and hole start offsets. JavaScript writes into them through the layout.

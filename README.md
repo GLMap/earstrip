@@ -2,13 +2,15 @@
 
 Polygon triangulation that is fast on clean polygons and right on broken ones: ear clipping that writes **triangle
 strips**, and a **constrained Delaunay triangulation** for everything the ears cannot cut. A header-only C++17
-library, and a WebAssembly build for JavaScript with the same call as [earcut](https://github.com/mapbox/earcut).
+library, and a WebAssembly build for JavaScript with two ways in: the same call as
+[earcut](https://github.com/mapbox/earcut), and direct calls that write into the module's memory and hand back an
+index buffer for WebGL 2 or WebGPU.
 
 - **Faster than earcut.** On 3.7 million map polygons: 508 ms natively against 545 ms. In a map engine compiled to
-  WebAssembly, with the polygons already in its memory, 600 ms in V8 and 592 ms in JavaScriptCore against 1,086 and
-  1,240 ms for earcut.js: 1.8 and 2.1 times as fast. Through the earcut-compatible JavaScript call, 1.27 and 1.35
-  times per polygon and 1.60 and 1.73 times with all polygons in one call. On polygons with thousands of holes, 6.2
-  times natively and 7.3 times in V8.
+  WebAssembly, with the polygons already in its memory, 600 ms in V8 and 592 ms in JavaScriptCore against 1,092 and
+  1,261 ms for earcut.js. Through the earcut-compatible JavaScript call, 1.4 and 1.5 times as fast per polygon; with
+  all polygons written straight into the module and returned as one restart index buffer, 1.7 and 1.9 times. On
+  polygons with thousands of holes, 6.2 times natively and 7.4 times in V8.
 - **Strips, not lists:** 1.66 indices per triangle on map polygons instead of 3.
 - **Right on broken input.** Rings that cross themselves or each other, touch, or hold a hole outside the outer ring
   get a fill by a fixed rule instead of whatever the ears happened to cut. On such polygons from real map tiles, the
@@ -34,10 +36,16 @@ t.triangles(list); // or as a list, three indices per triangle
 ```
 
 ```js
-import earstrip from 'earstrip';
+import earstrip, { direct } from 'earstrip';
 
 const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 3, 3, 7, 3, 7, 7, 3, 7], [4]);
 // [vertex indices, three per triangle], the same arguments as earcut(data, holeIndices, dim)
+
+const { coords, holes } = direct.input(8, 1); // or write into the module's memory
+coords.set([0, 0, 10, 0, 10, 10, 0, 10, 3, 3, 7, 3, 7, 7, 3, 7]);
+holes.set([4]);
+const r = direct.run(8, 1); // strips with 0xFFFFFFFF restarts, every triangle counter-clockwise
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, r.u32, gl.STATIC_DRAW, r.indexStart, r.indexCount);
 ```
 
 ## How it works
@@ -77,18 +85,20 @@ runs.
 | zoom 13, 3,740,425 polygons, 28.9 million vertices: C++ (earcut.hpp 3.2.4) | 508 ms | 545 ms |
 | the same in WebAssembly, loop inside the module, V8 / JavaScriptCore (earcut.hpp) | 600 / 592 ms | 922 / 839 ms |
 | the same in WebAssembly, one call from JavaScript per polygon, V8 / JavaScriptCore | 678 / 710 ms | 999 / 946 ms |
-| the same through the JavaScript package, one call per polygon (earcut.js 3.2.4) | 855 / 917 ms | 1,086 / 1,240 ms |
-| the same through the package, all polygons in one call | 677 / 718 ms | |
+| the same through the JavaScript package, one call per polygon (earcut.js 3.2.4) | 777 / 843 ms | 1,092 / 1,261 ms |
+| the same through the package, all polygons in one call | 690 / 694 ms | |
+| the same through the package's direct calls, one call per polygon, strips | 697 / 692 ms | |
+| the same through the direct calls, all polygons in one call, restart index buffer | 644 / 651 ms | |
 | zoom 9, 683,742 polygons: C++ | 69 ms | 83 ms |
-| zoom 9 through the package, one call per polygon, V8 / JavaScriptCore | 125 / 127 ms | 159 / 163 ms |
+| zoom 9 through the package, one call per polygon, V8 / JavaScriptCore | 112 / 117 ms | 161 / 160 ms |
 | world map tiles, 56,472 polygons, 3.4 million vertices: C++ | 463 ms | 2,861 ms |
-| world map tiles through the package, one call per polygon, V8 / JavaScriptCore | 661 / 641 ms | 4,853 / 4,019 ms |
+| world map tiles through the package, one call per polygon, V8 / JavaScriptCore | 663 / 641 ms | 4,895 / 4,040 ms |
 | indices per triangle | 1.66 as strips (1.95 at zoom 9), 3 as a list | 3 |
 
 The two WebAssembly rows are the case of an engine that keeps its geometry in WebAssembly memory: 16-bit tile
-coordinates, strips left in the module, the JavaScript call copying only the input. The package rows are a drop-in
-for earcut.js: coordinates as JavaScript numbers in, a new array of triangle indices out on every call, which is
-where the difference goes.
+coordinates, strips left in the module, the JavaScript call copying only the input. The package's earcut-compatible
+call takes coordinates as JavaScript numbers and returns a new array of triangle indices on every call; its direct
+calls write the coordinates into the module and leave the result there, which is most of the way to the engine.
 
 On the world map tiles the ears alone take 1,851 ms: past 128 rings the constrained triangulation is what makes the
 difference.
@@ -103,7 +113,7 @@ the rings on a 128 × 128 grid, on average and at worst:
 | 1,468 polygons of a map with unrepaired rings | 0.11%, 11% | 4.7%, 848% |
 
 Part of what remains is where non-zero winding fills more than even-odd does, a ring walked twice for example. The
-WebAssembly module is 81 KB, 30 KB with gzip.
+WebAssembly module is 68 KB, 27 KB with gzip.
 
 ## Building
 
