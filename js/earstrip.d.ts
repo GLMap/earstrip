@@ -16,6 +16,8 @@ declare namespace earstrip {
     function setForcedCuts(on: boolean): void;
     /** Send polygons the ears cannot finish to the constrained triangulation (default) or to forced cuts. */
     function setConstrained(on: boolean): void;
+    /** Frees the module's buffers, which otherwise keep the size of the largest polygon seen. */
+    function shrink(): void;
     /** GeoJSON-style rings as earstrip's arguments. */
     function flatten(rings: ArrayLike<ArrayLike<ArrayLike<number>>>): { vertices: number[]; holes: number[]; dimensions: number };
     /** Resolves once the WebAssembly module is compiled; already resolved where it compiles synchronously. */
@@ -28,5 +30,6 @@ export declare const batch: typeof earstrip.batch;
 export declare const lastStatus: typeof earstrip.lastStatus;
 export declare const setForcedCuts: typeof earstrip.setForcedCuts;
 export declare const setConstrained: typeof earstrip.setConstrained;
+export declare const shrink: typeof earstrip.shrink;
 export declare const flatten: typeof earstrip.flatten;
 export declare const ready: Promise<void>;

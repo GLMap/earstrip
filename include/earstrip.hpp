@@ -1600,6 +1600,18 @@ public:
     // vertices of all rings.
     const std::vector<double> &extraPoints() const { return _extra; }
 
+    // Frees the buffers, which otherwise keep the size of the largest polygon seen, and the last result; the settings
+    // stay. The next run allocates again.
+    void shrink()
+    {
+        const bool listMode = _listMode, forcedCuts = _forcedCuts, constrained = _constrained, extraAllowed = _extraAllowed;
+        *this = Triangulator();
+        _listMode = listMode;
+        _forcedCuts = forcedCuts;
+        _constrained = constrained;
+        _extraAllowed = extraAllowed;
+    }
+
 private:
     static constexpr uint32_t None = UINT32_MAX;
     // Joining a hole to the boundary scans the boundary: with more rings the constrained triangulation is faster

@@ -2,7 +2,7 @@
 // native results on every polygon of it.
 // Usage: node test/test.mjs [polygons.bin]
 import { readFileSync } from 'node:fs';
-import earstrip, { batch, flatten, lastStatus, setConstrained, setForcedCuts, strips } from '../earstrip.js';
+import earstrip, { batch, flatten, lastStatus, setConstrained, setForcedCuts, shrink, strips } from '../earstrip.js';
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -56,6 +56,9 @@ for (let i = 0; i < 20; ++i)
     }
 t = earstrip(grid, gridHoles);
 check('200 holes: constrained', lastStatus() === 'constrained' && area(grid, t) === 410 * 210 - 200 * 100);
+shrink();
+const again = earstrip(grid, gridHoles);
+check('shrink, then the same polygon', again.length === t.length && again.every((v, i) => v === t[i]));
 const f = flatten([[[0, 0], [10, 0], [10, 10], [0, 10]], [[3, 3], [7, 3], [7, 7], [3, 7]]]);
 check('flatten', earstrip(f.vertices, f.holes, f.dimensions).length === 24);
 const b = batch(new Float64Array([...square, ...withHole]), new Uint32Array([0, 4, 12]), new Uint32Array([4]), new Uint32Array([0, 0, 1]));

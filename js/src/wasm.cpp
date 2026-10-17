@@ -64,6 +64,16 @@ EXPORT(holeBuffer) uint32_t *holeBuffer() { return holes.data(); }
 
 EXPORT(setForcedCuts) void setForcedCuts(uint32_t on) { triangulator.setForcedCuts(on != 0); }
 EXPORT(setConstrained) void setConstrained(uint32_t on) { triangulator.setConstrained(on != 0); }
+
+// Frees the triangulator's and the call buffers; WebAssembly memory itself never shrinks, but the allocator reuses it.
+EXPORT(shrink) void shrink()
+{
+    triangulator.shrink();
+    for (auto *v : {&holes, &starts, &holeStarts, &output, &offsets})
+        std::vector<uint32_t>().swap(*v);
+    std::vector<double>().swap(coords);
+    publish();
+}
 EXPORT(lastStatus) uint32_t lastStatus() { return (uint32_t)status; }
 
 // Triangle list of the polygon in the buffers; returns the index count, output() the indices.

@@ -911,6 +911,25 @@ static void constrainedTests()
         printf("%-38s %s  status %d\n", "constrained: past the index range", good ? "PASS" : "FAIL", (int)s);
         bad += !good;
     }
+    // shrink() frees the buffers and keeps the settings: the same polygon gives the same result again
+    {
+        Poly grid(1);
+        grid[0] = {{0, 0}, {410, 0}, {410, 210}, {0, 210}};
+        for (int i = 0; i < 20; ++i)
+            for (int j = 0; j < 10; ++j) {
+                const double x = 10 + 20 * i, y = 10 + 20 * j;
+                grid.push_back({{x, y}, {x, y + 10}, {x + 10, y + 10}, {x + 10, y}});
+            }
+        earstrip::Triangulator<uint32_t> t;
+        t.setConstrained(false);
+        t.run(grid);
+        const std::vector<uint32_t> before = t.strips();
+        t.shrink();
+        bool good = t.strips().empty() && t.stripEnds().empty();
+        good &= t.run(grid) == earstrip::Status::Exact && t.strips() == before;
+        printf("%-38s %s\n", "shrink keeps the settings", good ? "PASS" : "FAIL");
+        bad += !good;
+    }
     failures += bad;
 }
 

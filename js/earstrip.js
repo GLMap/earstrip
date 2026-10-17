@@ -135,6 +135,13 @@ export function setConstrained(on) {
     ex.setConstrained(on ? 1 : 0);
 }
 
+// Frees the module's buffers, which otherwise keep the size of the largest polygon seen. WebAssembly memory never
+// shrinks, but what is freed is used again.
+export function shrink() {
+    ex.shrink();
+    views();
+}
+
 // GeoJSON-style rings (arrays of [x, y, ...] points, outer ring first) as earstrip's arguments.
 export function flatten(rings) {
     const vertices = [], holes = [];
@@ -155,5 +162,6 @@ earstrip.batch = batch;
 earstrip.lastStatus = lastStatus;
 earstrip.setForcedCuts = setForcedCuts;
 earstrip.setConstrained = setConstrained;
+earstrip.shrink = shrink;
 earstrip.flatten = flatten;
 earstrip.ready = ready;
