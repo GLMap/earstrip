@@ -2,7 +2,7 @@
 // Both get the same Float64Array per polygon and return a new array of triangle indices each call.
 // Usage: node bench/bench.mjs <polygons.bin> --earcut <path to earcut's ES module> [-r repeats]
 import { readFileSync } from 'node:fs';
-import earstrip, { batch } from '../earstrip.js';
+import earstrip, { batch, direct } from '../earstrip.js';
 
 const args = process.argv.slice(2);
 let repeats = 7, earcutPath = null;
@@ -52,7 +52,32 @@ const runs = {
         return sink;
     },
     'earstrip.batch, one call for all': () => batch(all, polygonStarts, holeArray, holeStarts).indices.length,
+    'direct.triangles, one call per polygon': () => perPolygon((n, h) => direct.triangles(n, h).length),
+    'direct.strips, one call per polygon': () => perPolygon((n, h) => direct.strips(n, h).indices.length),
+    'direct.restart, one call per polygon': () => perPolygon((n, h) => direct.restart(n, h).length),
+    'direct.batch, triangles': () => directBatch('triangles'),
+    'direct.batch, restart': () => directBatch('restart'),
 };
+// the direct calls: each polygon written straight into the module's memory, results read as views
+function perPolygon(run) {
+    let sink = 0;
+    for (let p = 0; p < P; ++p) {
+        const n = data[p].length >> 1, h = holes[p] ? holes[p].length : 0;
+        const input = direct.input(n, h);
+        input.coords.set(data[p]);
+        if (h) input.holes.set(holes[p]);
+        sink += run(n, h);
+    }
+    return sink;
+}
+function directBatch(output) {
+    const input = direct.batchInput(P, all.length >> 1, holeArray.length);
+    input.coords.set(all);
+    input.polygonStarts.set(polygonStarts);
+    input.holes.set(holeArray);
+    input.holeStarts.set(holeStarts);
+    return direct.batch(P, 2, output).indices.length;
+}
 if (earcut)
     runs['earcut.js, one call per polygon'] = () => {
         let sink = 0;
@@ -65,7 +90,7 @@ for (let r = 0; r < repeats; ++r)
     for (const [name, fn] of r & 1 ? [...order].reverse() : order) best[name] = Math.min(best[name] ?? Infinity, time(fn)[0]);
 const engine = typeof Bun !== 'undefined' ? `Bun ${Bun.version} (JavaScriptCore)` : `Node ${process.version} (V8)`;
 console.log(`${P} polygons, ${N} vertices, ${engine}, best of ${repeats}:`);
-for (const [name, ms] of Object.entries(best)) console.log(`  ${name.padEnd(36)} ${ms.toFixed(1)} ms`);
+for (const [name, ms] of Object.entries(best)) console.log(`  ${name.padEnd(40)} ${ms.toFixed(1)} ms`);
 if (earcut) {
     const e = best['earcut.js, one call per polygon'];
     console.log(`  earcut.js / earstrip: ${(e / best['earstrip, one call per polygon']).toFixed(2)}x per call, ${(e / best['earstrip.batch, one call for all']).toFixed(2)}x batch`);

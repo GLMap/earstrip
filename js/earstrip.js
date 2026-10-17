@@ -112,7 +112,7 @@ export function batch(data, polygonStarts, holeIndices, holeStarts, dim = 2) {
     u32.set(polygonStarts, s >> 2);
     if (holeStarts) u32.set(holeStarts, ex.batchHoleStarts() >> 2);
     else u32.fill(0, ex.batchHoleStarts() >> 2, (ex.batchHoleStarts() >> 2) + polygons + 1);
-    const count = ex.triangulateBatch(polygons, dim);
+    const count = ex.triangulateBatch(polygons, dim, 0);
     views();
     const out = ex.output() >> 2, off = ex.offsets() >> 2;
     return { indices: u32.slice(out, out + count), offsets: u32.slice(off, off + polygons + 1) };
@@ -142,6 +142,85 @@ export function shrink() {
     views();
 }
 
+// The direct calls: the caller writes into the module's memory and reads the results there, with no copies. Every
+// view stays valid until the next earstrip call; take a copy (slice) of what you keep.
+//
+//     const { coords, holes } = direct.input(vertexCount, holeCount); // write the polygon into these
+//     const s = direct.strips(vertexCount, holeCount);                 // or restart() or triangles()
+function inputViews(count, holeCount) {
+    if (u32.buffer !== memory.buffer) views();
+    if (u32[layout + 1] < count || u32[layout + 3] < holeCount) {
+        ex.grow(count, holeCount);
+        views();
+    }
+    const c = u32[layout] >> 3, h = u32[layout + 2] >> 2;
+    return { coords: f64.subarray(c, c + count), holes: u32.subarray(h, h + holeCount) };
+}
+
+export const direct = {
+    // Room for vertexCount vertices of dim numbers each and holeCount hole starts, as views to write into.
+    input(vertexCount, holeCount = 0, dim = 2) {
+        if (!ex) throw new Error('earstrip: the WebAssembly module is not compiled yet, await ready first');
+        return inputViews(vertexCount * dim, holeCount);
+    },
+    // Strips of the polygon in the input: { indices, ends, clockwise, points }, as strips() returns, but views.
+    strips(vertexCount, holeCount = 0, dim = 2) {
+        const count = ex.strip(vertexCount, dim, holeCount);
+        views();
+        const indexCount = ex.stripIndexCount(), added = ex.extraPointCount();
+        const i = ex.stripIndices() >> 2, e = ex.stripEnds() >> 2, c = ex.stripClockwise(), p = ex.extraPoints() >> 3;
+        return {
+            indices: u32.subarray(i, i + indexCount),
+            ends: u32.subarray(e, e + count),
+            clockwise: u8.subarray(c, c + count),
+            points: f64.subarray(p, p + 2 * added),
+        };
+    },
+    // One index buffer for TRIANGLE_STRIP with primitive restart (WebGL 2, WebGPU with stripIndexFormat 'uint32'):
+    // 0xFFFFFFFF between strips, every triangle counter-clockwise. Added points: extraPoints().
+    restart(vertexCount, holeCount = 0, dim = 2) {
+        const count = ex.restart(vertexCount, dim, holeCount);
+        views();
+        const o = ex.output() >> 2;
+        return u32.subarray(o, o + count);
+    },
+    // The triangle list, three counter-clockwise triangle's indices each; every index is an input vertex.
+    triangles(vertexCount, holeCount = 0, dim = 2) {
+        ex.run(vertexCount, dim, holeCount);
+        if (u32.buffer !== memory.buffer) views();
+        const o = u32[layout + 4] >> 2;
+        return u32.subarray(o, o + u32[layout + 5]);
+    },
+    // Points the last strips() or restart() added, as x, y pairs.
+    extraPoints() {
+        views();
+        const p = ex.extraPoints() >> 3;
+        return f64.subarray(p, p + 2 * ex.extraPointCount());
+    },
+    // Room for a batch: { coords, polygonStarts, holes, holeStarts } to write into, as batch() takes them.
+    batchInput(polygons, vertexCount, holeCount = 0, dim = 2) {
+        if (!ex) throw new Error('earstrip: the WebAssembly module is not compiled yet, await ready first');
+        ex.reserveAll(vertexCount * dim, holeCount, polygons);
+        views();
+        const c = u32[layout] >> 3, h = u32[layout + 2] >> 2, s = ex.batchStarts() >> 2, hs = ex.batchHoleStarts() >> 2;
+        return {
+            coords: f64.subarray(c, c + vertexCount * dim),
+            holes: u32.subarray(h, h + holeCount),
+            polygonStarts: u32.subarray(s, s + polygons + 1),
+            holeStarts: u32.subarray(hs, hs + polygons + 1),
+        };
+    },
+    // Every polygon of the batch input: { indices, offsets } as views, indices counting from the batch's first vertex.
+    // output 'triangles' (default) or 'restart': one restart index buffer for the whole batch; polygon k's part starts
+    // at offsets[k], with a restart index unless it is the first.
+    batch(polygons, dim = 2, output = 'triangles') {
+        const count = ex.triangulateBatch(polygons, dim, output === 'restart' ? 1 : 0);
+        views();
+        const o = ex.output() >> 2, off = ex.offsets() >> 2;
+        return { indices: u32.subarray(o, o + count), offsets: u32.subarray(off, off + polygons + 1) };
+    },
+};
+
 // GeoJSON-style rings (arrays of [x, y, ...] points, outer ring first) as earstrip's arguments.
 export function flatten(rings) {
     const vertices = [], holes = [];
@@ -163,5 +242,6 @@ earstrip.lastStatus = lastStatus;
 earstrip.setForcedCuts = setForcedCuts;
 earstrip.setConstrained = setConstrained;
 earstrip.shrink = shrink;
+earstrip.direct = direct;
 earstrip.flatten = flatten;
 earstrip.ready = ready;

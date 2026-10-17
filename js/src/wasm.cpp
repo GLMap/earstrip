@@ -101,7 +101,50 @@ EXPORT(stripIndices) const uint32_t *stripIndices() { return triangulator.strips
 EXPORT(stripEnds) const uint32_t *stripEnds() { return triangulator.stripEnds().data(); }
 EXPORT(stripClockwise) const uint8_t *stripClockwise() { return triangulator.stripClockwise().data(); }
 EXPORT(extraPointCount) uint32_t extraPointCount() { return (uint32_t)triangulator.extraPoints().size() / 2; }
+
+// Appends the strips as one index buffer for TRIANGLE_STRIP with primitive restart: 0xFFFFFFFF between strips, and
+// a strip whose first triangle runs clockwise starts with its first index twice, so every triangle is counter-clockwise.
+static void appendRestart(uint32_t first)
+{
+    const auto &strips = triangulator.strips();
+    const auto &ends = triangulator.stripEnds();
+    const auto &cw = triangulator.stripClockwise();
+    uint32_t begin = 0;
+    for (size_t k = 0; k < ends.size(); ++k) {
+        if (!output.empty())
+            output.push_back(UINT32_MAX);
+        if (cw[k])
+            output.push_back(first + strips[begin]);
+        for (uint32_t i = begin; i < ends[k]; ++i)
+            output.push_back(first + strips[i]);
+        begin = ends[k];
+    }
+}
+
+// The polygon in the buffers as one restart index buffer; returns its length, output() the indices. Added points
+// are allowed: extraPoints() holds them.
+EXPORT(restart) uint32_t restart(uint32_t vertices, uint32_t dim, uint32_t holeCount)
+{
+    triangulator.setTriangleList(false);
+    triangulator.setExtraPoints(true);
+    status = triangulator.run(coords.data(), vertices, dim, holes.data(), holeCount);
+    output.clear();
+    appendRestart(0);
+    return (uint32_t)output.size();
+}
 EXPORT(extraPoints) const double *extraPoints() { return triangulator.extraPoints().data(); }
+
+// Room for a batch of the given sizes in one go: count coordinates, holeCount hole starts, polygons + 1 vertex starts
+// and hole start offsets. JavaScript writes into them through the layout.
+EXPORT(reserveAll) void reserveAll(uint32_t count, uint32_t holeCount, uint32_t polygons)
+{
+    coords.resize(count);
+    holes.resize(holeCount);
+    starts.resize(polygons + 1);
+    holeStarts.resize(polygons + 1);
+    publish();
+}
+EXPORT(batchStarts) uint32_t *batchStarts() { return starts.data(); }
 
 // Room for a batch: polygons + 1 vertex starts and hole start offsets; the hole starts themselves go to holeBuffer().
 EXPORT(reserveBatch) uint32_t *reserveBatch(uint32_t polygons)
@@ -115,16 +158,21 @@ EXPORT(batchHoleStarts) uint32_t *batchHoleStarts() { return holeStarts.data(); 
 // Triangle lists of many polygons at once: polygon k has the vertices [starts[k], starts[k + 1]) of the coordinates
 // and the holes holeBuffer()[holeStarts[k] .. holeStarts[k + 1]), counted from its first vertex. Indices in the
 // output count from the first vertex of the batch; offsets() gives where each polygon's indices begin.
-EXPORT(triangulateBatch) uint32_t triangulateBatch(uint32_t polygons, uint32_t dim)
+// mode 1 writes one restart index buffer instead of triangles (see appendRestart).
+EXPORT(triangulateBatch) uint32_t triangulateBatch(uint32_t polygons, uint32_t dim, uint32_t mode)
 {
     output.clear();
     offsets.resize(polygons + 1);
-    triangulator.setTriangleList(true);
+    triangulator.setTriangleList(mode == 0);
     triangulator.setExtraPoints(false);
     for (uint32_t k = 0; k < polygons; ++k) {
         offsets[k] = (uint32_t)output.size();
         const uint32_t first = starts[k];
         triangulator.run(coords.data() + (size_t)first * dim, starts[k + 1] - first, dim, holes.data() + holeStarts[k], holeStarts[k + 1] - holeStarts[k]);
+        if (mode == 1) {
+            appendRestart(first);
+            continue;
+        }
         const auto &list = triangulator.triangleList();
         const size_t begin = output.size();
         output.resize(begin + list.size());
