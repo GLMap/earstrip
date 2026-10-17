@@ -1,13 +1,20 @@
 # earstrip
 
-Polygon triangulation by ear clipping that writes **triangle strips**, with a constrained Delaunay triangulation for
-the polygons ears cannot cut: a header-only C++17 library and a WebAssembly build for JavaScript with the same call
-as [earcut](https://github.com/mapbox/earcut).
+Polygon triangulation that is fast on clean polygons and right on broken ones: ear clipping that writes **triangle
+strips**, and a **constrained Delaunay triangulation** for everything the ears cannot cut. A header-only C++17
+library, and a WebAssembly build for JavaScript with the same call as [earcut](https://github.com/mapbox/earcut).
 
-It is the triangulator of the [GLMap](https://globus.software) map engine, where it cuts every building, park and
-lake of an offline map on the phone; on the 5.8 million polygons of our test sets the library writes exactly the
-strips the engine does, ears and constrained triangulation alike. Strips take 1.7 to 2 indices per triangle instead
-of 3, and earstrip is faster than earcut natively and in the browser.
+- **Faster than earcut.** On 3.7 million map polygons: 521 ms natively against 553 ms; in JavaScript 1.29 times as
+  fast in V8 and 1.40 in JavaScriptCore, one call per polygon, and 1.62 and 1.80 times with all polygons in one call.
+  On polygons with thousands of holes, 6.2 times natively and 7.4 times in V8.
+- **Strips, not lists:** 1.66 indices per triangle on map polygons instead of 3.
+- **Right on broken input.** Rings that cross themselves or each other, touch, or hold a hole outside the outer ring
+  get a fill by a fixed rule instead of whatever the ears happened to cut. On such polygons from real map tiles, the
+  triangles miss or overpaint 0.15% of the pixels on average, earcut 31%; at worst 2.6% against 483%.
+- **Proven on real data.** It is the triangulator of the [GLMap](https://globus.software) map engine, which cuts every
+  building, park and lake of an offline map on the phone with it; on the 5.8 million polygons of our test sets the
+  library writes exactly the engine's strips, natively and in WebAssembly.
+- **No allocation once warm:** the buffers grow to the largest polygon and are reused; `shrink()` frees them.
 
 ```cpp
 #include "earstrip.hpp"
@@ -31,7 +38,7 @@ const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 3, 3, 7, 3, 7, 7, 3, 7],
 // [vertex indices, three per triangle], the same arguments as earcut(data, holeIndices, dim)
 ```
 
-## What it does
+## How it works
 
 - **Ear clipping that only tests dents.** Only a reflex vertex can block an ear, so a test reads the reflex
   vertices alone; above 32 of them they go into buckets along the longer axis, and the test is a branch-free count
@@ -54,26 +61,28 @@ const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 3, 3, 7, 3, 7, 7, 3, 7],
   the constrained triangulation; other input is rounded there to a 2³⁰ grid over the polygon's bounding box. Points
   can be anything with `.x`/`.y` members, `std::array`, `std::pair`, flat arrays with a stride, or your own
   `earstrip::point_traits`.
+- **Memory.** A triangulator keeps its buffers between runs: 80 to 110 bytes per vertex of the largest polygon for
+  the ears and about 230 for the constrained triangulation. After the first polygons a run allocates nothing.
 
 ## Numbers
 
-Every polygon of zoom levels 13 and 9 of the Masovian Voivodeship (OpenStreetMap data, tile coordinates), one
-thread of an Apple M4 Pro, best of 5 to 7 runs.
+OpenStreetMap polygons in tile coordinates: every polygon of zoom levels 13 and 9 of the Masovian Voivodeship, and
+the polygons of GLMap's world map tiles, some with up to 11,675 holes. One thread of an Apple M4 Pro, best of 7
+runs.
 
-| 3,740,425 polygons, 28.9 million vertices | earstrip | earcut |
+| | earstrip | earcut |
 | --- | ---: | ---: |
-| C++, native (earcut.hpp 3.2.4) | 515 ms | 545 ms |
-| WebAssembly, one call per polygon from JS, V8 / JSC | 875 / 934 ms | |
-| WebAssembly, one batch call, V8 / JSC | 737 / 732 ms | |
-| earcut.js 3.2.4, V8 / JSC | | 1,109 / 1,288 ms |
-| Indices per triangle | 1.66 as strips (1.95 at zoom 9), 3 as a list | 3 |
+| zoom 13, 3,740,425 polygons, 28.9 million vertices: C++ (earcut.hpp 3.2.4) | 521 ms | 553 ms |
+| the same in JavaScript, one call per polygon, V8 / JavaScriptCore (earcut.js 3.2.4) | 850 / 914 ms | 1,095 / 1,276 ms |
+| the same, all polygons in one call, V8 / JavaScriptCore | 675 / 708 ms | |
+| zoom 9, 683,742 polygons: C++ | 70 ms | 84 ms |
+| zoom 9 in JavaScript, one call per polygon, V8 / JavaScriptCore | 124 / 125 ms | 159 / 160 ms |
+| world map tiles, 56,472 polygons, 3.4 million vertices: C++ | 467 ms | 2,892 ms |
+| world map tiles in JavaScript, one call per polygon, V8 / JavaScriptCore | 663 / 646 ms | 4,873 / 4,004 ms |
+| indices per triangle | 1.66 as strips (1.95 at zoom 9), 3 as a list | 3 |
 
-At zoom 9 (683,742 polygons) the native times are 67 ms against 83 ms. The constrained triangulation, added later,
-covers 82 of the zoom-13 polygons and changes these times within the noise.
-
-Polygons with many holes, the 56,472 polygons of GLMap's world map tiles, some with up to 11,675 holes (measured on
-a busy machine, so slower than the table above): earstrip 518 ms, earstrip with ears alone 2,100 ms, earcut.hpp
-3,194 ms.
+On the world map tiles the ears alone take 1,851 ms: past 128 rings the constrained triangulation is what makes the
+difference.
 
 On the polygons the ears cannot cut exactly, the share of pixels where the triangles differ from an even-odd fill of
 the rings on a 128 × 128 grid, on average and at worst:
@@ -84,7 +93,8 @@ the rings on a 128 × 128 grid, on average and at worst:
 | zoom 9, 183 polygons | 0.7%, 24% | 12%, 236% |
 | 1,468 polygons of a map with unrepaired rings | 0.11%, 11% | 4.7%, 848% |
 
-Part of what remains is where non-zero winding fills more than even-odd does, a ring walked twice for example. The WebAssembly module is 70 KB, 27 KB with gzip.
+Part of what remains is where non-zero winding fills more than even-odd does, a ring walked twice for example. The
+WebAssembly module is 73 KB, 28 KB with gzip.
 
 ## Building
 
