@@ -436,15 +436,6 @@ public:
         return std::abs(covered(strips, ends) - ringsArea) < std::abs(covered(_strips, _stripEnds) - ringsArea);
     }
 
-    // The same area for a triangle list.
-    bool closerList(const std::vector<Index> &list, double ringsArea) const
-    {
-        double sum = 0;
-        for (size_t k = 0; k + 2 < list.size(); k += 3)
-            sum += std::abs(cross(point(list[k]), point(list[k + 1]), point(list[k + 2])));
-        return std::abs(sum - ringsArea) < std::abs(covered(_strips, _stripEnds) - ringsArea);
-    }
-
 private:
     static bool integer(double v) { return v == std::floor(v) && v >= -2147483648.0 && v <= 2147483647.0; }
 
@@ -1562,22 +1553,32 @@ public:
     // The same triangles as a list, three indices each, every one counter-clockwise (positive area with y up).
     void triangles(std::vector<Index> &out) const
     {
-        out.clear();
+        size_t count = 0;
         uint32_t begin = 0;
+        for (uint32_t end : _stripEnds) {
+            count += end - begin >= 2 ? end - begin - 2 : 0;
+            begin = end;
+        }
+        out.resize(3 * count);
+        Index *o = out.data();
+        const Index *strip = _strips.data();
+        begin = 0;
         for (size_t s = 0; s < _stripEnds.size(); ++s) {
             const uint32_t end = _stripEnds[s];
+            const uint32_t cw = _stripCW[s] != 0;
             for (uint32_t k = begin; k + 2 < end; ++k) {
-                const bool flip = (((k - begin) & 1) != 0) != (_stripCW[s] != 0);
-                out.push_back(_strips[k + (flip ? 1 : 0)]);
-                out.push_back(_strips[k + (flip ? 0 : 1)]);
-                out.push_back(_strips[k + 2]);
+                const uint32_t flip = ((k - begin) & 1) ^ cw;
+                o[0] = strip[k + flip];
+                o[1] = strip[k + 1 - flip];
+                o[2] = strip[k + 2];
+                o += 3;
             }
             begin = end;
         }
     }
 
     // Writes a triangle list instead of strips: run() then fills triangleList() (three indices per triangle, each
-    // counter-clockwise) and leaves strips() empty. Cheaper than strips plus triangles() when a list is the goal.
+    // counter-clockwise, the same as triangles()) and leaves strips() empty.
     void setTriangleList(bool on) { _listMode = on; }
     const std::vector<Index> &triangleList() const { return _list; }
 
@@ -1653,9 +1654,6 @@ private:
     std::vector<uint8_t> _stripCW; // first triangle of the strip runs clockwise
     std::vector<Index> _list;      // triangle list mode output
     bool _listMode = false;
-    uint32_t _stripLen = 0; // indices in the strip being written
-    bool _cw = false;       // its first triangle runs clockwise
-    Index _p0 = 0, _p1 = 0; // its last two indices
     std::vector<uint32_t> _blockers;
     std::vector<Hole> _holes;
     std::vector<uint8_t> _merged;   // ring is part of the boundary
@@ -1692,6 +1690,18 @@ private:
     // its crossings untangled first, so that no ear cut before the stall spans the wrong area.
     template <class Rings> Status runRings(const Rings &rings)
     {
+        const Status s = runStrips(rings);
+        if (_listMode) {
+            triangles(_list);
+            _strips.clear();
+            _stripEnds.clear();
+            _stripCW.clear();
+        }
+        return s;
+    }
+
+    template <class Rings> Status runStrips(const Rings &rings)
+    {
         _extra.clear();
         _careful = false;
         if (_constrained && rings.count() > MaxEarRings && cover(rings, false))
@@ -1714,7 +1724,7 @@ private:
             return false;
         if (compare) {
             const double area = _cdt.inputRingsArea();
-            if (_listMode ? _cdt.closerList(_list, area) : _cdt.closer(_strips, _stripEnds, area))
+            if (_cdt.closer(_strips, _stripEnds, area))
                 return false;
         }
         std::swap(_strips, _cdt.strips());
@@ -1722,12 +1732,6 @@ private:
         std::swap(_stripCW, _cdt.stripClockwise());
         _cdt.extraPoints(_extra);
         _droppedHoles = false;
-        if (_listMode) {
-            triangles(_list);
-            _strips.clear();
-            _stripEnds.clear();
-            _stripCW.clear();
-        }
         return true;
     }
 
@@ -2061,19 +2065,6 @@ private:
     {
         const Node *n = _nodes.data();
         uint32_t lo = 1, hi = count - 1;
-        if (!_listMode) {
-            // the common case of strips, without the list writer's state
-            _strips.push_back(n[0].index);
-            while (lo <= hi) {
-                _strips.push_back(n[lo++].index);
-                if (lo <= hi)
-                    _strips.push_back(n[hi--].index);
-            }
-            _stripEnds.push_back((uint32_t)_strips.size());
-            _stripCW.push_back(clockwise);
-            return;
-        }
-        beginStrip(clockwise);
         put(n[0].index);
         while (lo <= hi) {
             put(n[lo++].index);
@@ -2083,34 +2074,12 @@ private:
         endStrip(clockwise);
     }
 
-    EARSTRIP_INLINE void beginStrip(bool clockwise)
-    {
-        _stripLen = 0;
-        _cw = clockwise;
-    }
+    // Adds an index to the strip being written.
+    EARSTRIP_INLINE void put(Index i) { _strips.push_back(i); }
 
-    // Adds an index to the strip being written; in list mode every index from the third on writes its triangle.
-    EARSTRIP_INLINE void put(Index i)
-    {
-        if (!_listMode) {
-            _strips.push_back(i);
-            return;
-        }
-        if (_stripLen >= 2) {
-            const bool flip = (((_stripLen - 2) & 1) != 0) != _cw;
-            _list.push_back(flip ? _p1 : _p0);
-            _list.push_back(flip ? _p0 : _p1);
-            _list.push_back(i);
-        }
-        _p0 = _p1;
-        _p1 = i;
-        _stripLen++;
-    }
-
+    // Ends the strip being written; clockwise: its first triangle runs clockwise.
     EARSTRIP_INLINE void endStrip(bool clockwise)
     {
-        if (_listMode)
-            return;
         _stripEnds.push_back((uint32_t)_strips.size());
         _stripCW.push_back(clockwise);
     }
@@ -2610,7 +2579,6 @@ private:
         const Node *n = _nodes.data();
         const uint32_t third = wedgeA <= wedgeB ? extraA : extraB;
         const bool ccw = cross(n[u], n[w], n[third]) > 0;
-        beginStrip(false);
         put(n[u].index);
         put(n[ccw ? w : third].index);
         put(n[ccw ? third : w].index);
@@ -2694,7 +2662,6 @@ private:
         }
         const uint32_t a = n[best].prev, b = n[best].next;
         unlink(best);
-        beginStrip(false);
         put(n[best].index);
         put(n[b].index);
         put(n[a].index);
@@ -2705,18 +2672,7 @@ private:
 
     // Cuts ears from the boundary through v into zig-zag strips; false when no ear is left even after the cleanup and
     // forced cuts are off.
-    bool clip(uint32_t v, uint32_t count) { return _listMode ? clipAs<true>(v, count) : clipAs<false>(v, count); }
-
-    // put() for an output mode known at compile time: the strips mode is a plain push in the hot loop.
-    template <bool List> EARSTRIP_INLINE void putAs(Index i)
-    {
-        if (!List)
-            _strips.push_back(i);
-        else
-            put(i);
-    }
-
-    template <bool List> bool clipAs(uint32_t v, uint32_t count)
+    bool clip(uint32_t v, uint32_t count)
     {
         if (count < 3)
             return true;
@@ -2748,23 +2704,19 @@ private:
             uint32_t a = n[v].prev, b = n[v].next;
             unlink(v);
             count--;
-            if (List)
-                beginStrip(false);
-            putAs<List>(n[v].index);
+            put(n[v].index);
             bool sideA, firstA;
             if (count >= 3 && isEar(a)) {
-                if (List)
-                    _cw = true;
-                putAs<List>(n[a].index);
-                putAs<List>(n[b].index);
+                put(n[a].index);
+                put(n[b].index);
                 sideA = firstA = true;
             } else if (count >= 3 && isEar(b)) {
-                putAs<List>(n[b].index);
-                putAs<List>(n[a].index);
+                put(n[b].index);
+                put(n[a].index);
                 sideA = firstA = false;
             } else {
-                putAs<List>(n[b].index);
-                putAs<List>(n[a].index);
+                put(n[b].index);
+                put(n[a].index);
                 endStrip(false);
                 v = n[b].next;
                 continue;
@@ -2773,12 +2725,12 @@ private:
             while (true) {
                 if (sideA) {
                     const uint32_t z = n[a].prev;
-                    putAs<List>(n[z].index);
+                    put(n[z].index);
                     unlink(a);
                     a = z;
                 } else {
                     const uint32_t z = n[b].next;
-                    putAs<List>(n[z].index);
+                    put(n[z].index);
                     unlink(b);
                     b = z;
                 }
