@@ -1,7 +1,7 @@
 # earstrip
 
 Polygon triangulation compiled to WebAssembly: ear clipping into triangle strips, and a constrained Delaunay
-triangulation for the polygons ears cannot cut. 1.3 to 1.8 times as fast as earcut on map polygons, 6 to 7 times on
+triangulation for the polygons ears cannot cut. 1.3 to 1.7 times as fast as earcut on map polygons, 6 to 7 times on
 polygons with thousands of holes, and right where earcut paints the wrong area on broken rings. The default export
 takes the same arguments as earcut and returns the same kind of result, so it can replace it in place:
 
@@ -14,7 +14,7 @@ const triangles = earstrip([0, 0, 10, 0, 10, 10, 0, 10, 2, 2, 8, 2, 8, 8, 2, 8],
 ```
 
 The module is inlined and compiles synchronously where the platform allows it; elsewhere `await ready` before the
-first call. It is 73 KB, 28 KB with gzip.
+first call. It is 81 KB, 30 KB with gzip.
 
 ## Triangle strips
 
@@ -58,11 +58,11 @@ OpenStreetMap polygons in tile coordinates, Apple M4 Pro, one thread, best of 7 
 
 | | V8 (Node 26) | JavaScriptCore (Bun 1.3) |
 |---|---:|---:|
-| 3,740,425 polygons of zoom 13: earstrip, one call per polygon | 850 ms | 914 ms |
-| the same, all in one batch call | 675 ms | 708 ms |
-| the same, earcut.js | 1,095 ms | 1,276 ms |
-| 56,472 polygons of world map tiles, up to 11,675 holes: earstrip | 663 ms | 646 ms |
-| the same, earcut.js | 4,873 ms | 4,004 ms |
+| 3,740,425 polygons of zoom 13: earstrip, one call per polygon | 855 ms | 917 ms |
+| the same, all in one batch call | 677 ms | 718 ms |
+| the same, earcut.js | 1,086 ms | 1,240 ms |
+| 56,472 polygons of world map tiles, up to 11,675 holes: earstrip | 661 ms | 641 ms |
+| the same, earcut.js | 4,853 ms | 4,019 ms |
 
 On the polygons the ears cannot cut exactly, 82 at zoom 13, the triangles differ from an even-odd fill of the rings
 on 0.15% of the pixels on average and 2.6% at worst; earcut on 31% and 483%.

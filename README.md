@@ -4,9 +4,11 @@ Polygon triangulation that is fast on clean polygons and right on broken ones: e
 strips**, and a **constrained Delaunay triangulation** for everything the ears cannot cut. A header-only C++17
 library, and a WebAssembly build for JavaScript with the same call as [earcut](https://github.com/mapbox/earcut).
 
-- **Faster than earcut.** On 3.7 million map polygons: 521 ms natively against 553 ms; in JavaScript 1.29 times as
-  fast in V8 and 1.40 in JavaScriptCore, one call per polygon, and 1.62 and 1.80 times with all polygons in one call.
-  On polygons with thousands of holes, 6.2 times natively and 7.4 times in V8.
+- **Faster than earcut.** On 3.7 million map polygons: 508 ms natively against 545 ms. In a map engine compiled to
+  WebAssembly, with the polygons already in its memory, 600 ms in V8 and 592 ms in JavaScriptCore against 1,086 and
+  1,240 ms for earcut.js: 1.8 and 2.1 times as fast. Through the earcut-compatible JavaScript call, 1.27 and 1.35
+  times per polygon and 1.60 and 1.73 times with all polygons in one call. On polygons with thousands of holes, 6.2
+  times natively and 7.3 times in V8.
 - **Strips, not lists:** 1.66 indices per triangle on map polygons instead of 3.
 - **Right on broken input.** Rings that cross themselves or each other, touch, or hold a hole outside the outer ring
   get a fill by a fixed rule instead of whatever the ears happened to cut. On such polygons from real map tiles, the
@@ -72,14 +74,21 @@ runs.
 
 | | earstrip | earcut |
 | --- | ---: | ---: |
-| zoom 13, 3,740,425 polygons, 28.9 million vertices: C++ (earcut.hpp 3.2.4) | 521 ms | 553 ms |
-| the same in JavaScript, one call per polygon, V8 / JavaScriptCore (earcut.js 3.2.4) | 850 / 914 ms | 1,095 / 1,276 ms |
-| the same, all polygons in one call, V8 / JavaScriptCore | 675 / 708 ms | |
-| zoom 9, 683,742 polygons: C++ | 70 ms | 84 ms |
-| zoom 9 in JavaScript, one call per polygon, V8 / JavaScriptCore | 124 / 125 ms | 159 / 160 ms |
-| world map tiles, 56,472 polygons, 3.4 million vertices: C++ | 467 ms | 2,892 ms |
-| world map tiles in JavaScript, one call per polygon, V8 / JavaScriptCore | 663 / 646 ms | 4,873 / 4,004 ms |
+| zoom 13, 3,740,425 polygons, 28.9 million vertices: C++ (earcut.hpp 3.2.4) | 508 ms | 545 ms |
+| the same in WebAssembly, loop inside the module, V8 / JavaScriptCore (earcut.hpp) | 600 / 592 ms | 922 / 839 ms |
+| the same in WebAssembly, one call from JavaScript per polygon, V8 / JavaScriptCore | 678 / 710 ms | 999 / 946 ms |
+| the same through the JavaScript package, one call per polygon (earcut.js 3.2.4) | 855 / 917 ms | 1,086 / 1,240 ms |
+| the same through the package, all polygons in one call | 677 / 718 ms | |
+| zoom 9, 683,742 polygons: C++ | 69 ms | 83 ms |
+| zoom 9 through the package, one call per polygon, V8 / JavaScriptCore | 125 / 127 ms | 159 / 163 ms |
+| world map tiles, 56,472 polygons, 3.4 million vertices: C++ | 463 ms | 2,861 ms |
+| world map tiles through the package, one call per polygon, V8 / JavaScriptCore | 661 / 641 ms | 4,853 / 4,019 ms |
 | indices per triangle | 1.66 as strips (1.95 at zoom 9), 3 as a list | 3 |
+
+The two WebAssembly rows are the case of an engine that keeps its geometry in WebAssembly memory: 16-bit tile
+coordinates, strips left in the module, the JavaScript call copying only the input. The package rows are a drop-in
+for earcut.js: coordinates as JavaScript numbers in, a new array of triangle indices out on every call, which is
+where the difference goes.
 
 On the world map tiles the ears alone take 1,851 ms: past 128 rings the constrained triangulation is what makes the
 difference.
@@ -94,7 +103,7 @@ the rings on a 128 × 128 grid, on average and at worst:
 | 1,468 polygons of a map with unrepaired rings | 0.11%, 11% | 4.7%, 848% |
 
 Part of what remains is where non-zero winding fills more than even-odd does, a ring walked twice for example. The
-WebAssembly module is 73 KB, 28 KB with gzip.
+WebAssembly module is 81 KB, 30 KB with gzip.
 
 ## Building
 
