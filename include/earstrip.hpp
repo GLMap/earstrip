@@ -2063,7 +2063,7 @@ private:
     }
 
     // A convex ring is one zig-zag strip, wound the way the ring runs.
-    void emitConvex(uint32_t count, bool clockwise)
+    EARSTRIP_INLINE void emitConvex(uint32_t count, bool clockwise)
     {
         const Node *n = _nodes.data();
         uint32_t lo = 1, hi = count - 1;
