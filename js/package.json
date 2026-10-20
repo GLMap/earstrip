@@ -1,7 +1,7 @@
 {
   "name": "earstrip",
-  "version": "0.1.0",
-  "description": "Fast polygon triangulation into triangle strips: ear clipping in WebAssembly, an earcut-compatible call",
+  "version": "0.2.0",
+  "description": "Fast polygon triangulation into triangle strips: ear clipping with a constrained Delaunay fallback for broken rings, in WebAssembly, with an earcut-compatible call",
   "type": "module",
   "main": "earstrip.js",
   "module": "earstrip.js",
@@ -17,7 +17,7 @@
     "build": "./build.sh",
     "test": "node test/test.mjs"
   },
-  "keywords": ["triangulation", "polygon", "ear clipping", "triangle strip", "webgl", "webgpu", "wasm", "map", "earcut"],
+  "keywords": ["triangulation", "polygon", "ear clipping", "triangle strip", "constrained delaunay", "webgl", "webgpu", "wasm", "map", "earcut"],
   "license": "ISC",
   "author": "Evgen Bodunov",
   "repository": { "type": "git", "url": "git+https://github.com/GLMap/earstrip.git" },

@@ -4,3 +4,6 @@ js/dist/
 js/node_modules/
 *.bin
 .DS_Store
+data/*.tar.xz
+bench/wasm/module.mjs
+bench/wasm/module.wasm

@@ -1,7 +1,9 @@
 // earstrip (WebAssembly, through the public calls) against earcut.js on every polygon of a PLY1 file.
 // Both get the same Float64Array per polygon and return a new array of triangle indices each call.
-// Usage: node bench/bench.mjs <polygons.bin> --earcut <path to earcut's ES module> [-r repeats]
+// Usage: node js/bench/bench.mjs <polygons.bin> --earcut <path to earcut's ES module> [-r repeats]
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import earstrip, { batch, direct } from '../earstrip.js';
 
 const args = process.argv.slice(2);
@@ -10,7 +12,7 @@ for (let i = 1; i < args.length; ++i) {
     if (args[i] === '-r') repeats = +args[++i];
     else if (args[i] === '--earcut') earcutPath = args[++i];
 }
-const earcut = earcutPath ? (await import(earcutPath)).default : null;
+const earcut = earcutPath ? (await import(pathToFileURL(resolve(earcutPath)).href)).default : null;
 const gc = globalThis.gc ?? (typeof Bun !== 'undefined' ? () => Bun.gc(true) : () => {});
 
 const buf = readFileSync(args[0]);

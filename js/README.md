@@ -1,7 +1,7 @@
 # earstrip
 
 Polygon triangulation compiled to WebAssembly: ear clipping into triangle strips, and a constrained Delaunay
-triangulation for the polygons ears cannot cut. 1.4 to 1.9 times as fast as earcut on map polygons, 6 to 7 times on
+triangulation for the polygons ears cannot cut. 1.4 to 2.1 times as fast as earcut on map polygons, 6 to 7 times on
 polygons with thousands of holes, and right where earcut paints the wrong area on broken rings.
 
 There are two ways to call it:
@@ -95,20 +95,20 @@ OpenStreetMap polygons in tile coordinates, Apple M4 Pro, one thread, best of 7 
 
 | | V8 (Node 26) | JavaScriptCore (Bun 1.3) |
 |---|---:|---:|
-| 3,740,425 polygons of zoom 13: `earstrip()`, one call per polygon | 777 ms | 843 ms |
-| the same, all in one `batch()` call | 690 ms | 694 ms |
-| the same, `direct.run()` per polygon, `'strips'` | 697 ms | 692 ms |
-| the same, `direct.run()` per polygon, `'restart'` | 755 ms | 750 ms |
-| the same, all in one `direct.batch()` call, `'restart'` | 644 ms | 651 ms |
-| the same, earcut.js | 1,092 ms | 1,261 ms |
-| 56,472 polygons of world map tiles, up to 11,675 holes: `earstrip()` | 663 ms | 641 ms |
-| the same, earcut.js | 4,895 ms | 4,040 ms |
+| 3,740,425 polygons of zoom 13: `earstrip()`, one call per polygon | 766 ms | 807 ms |
+| the same, all in one `batch()` call | 671 ms | 661 ms |
+| the same, `direct.run()` per polygon, `'strips'` | 682 ms | 662 ms |
+| the same, `direct.run()` per polygon, `'restart'` | 747 ms | 721 ms |
+| the same, all in one `direct.batch()` call, `'restart'` | 635 ms | 619 ms |
+| the same, earcut.js | 1,103 ms | 1,290 ms |
+| 56,472 polygons of world map tiles, up to 11,675 holes: `earstrip()` | 662 ms | 633 ms |
+| the same, earcut.js | 4,927 ms | 4,016 ms |
 
 Beyond the triangulation itself, the time goes mostly into turning the strips into another layout: a list for
 `earstrip()`, a restart buffer for `'restart'`. Copying the coordinates in and making the JavaScript array cost little
 in V8, more in JavaScriptCore. `'strips'` hands the strips over as they are, and a batch also saves crossing into
 WebAssembly for every polygon. With the polygons as 16-bit coordinates already in WebAssembly memory and the loop
-inside the module, the same zoom 13 takes 600 ms in V8 and 592 ms in JavaScriptCore.
+inside the module, the same zoom 13 takes 601 ms in V8 and 566 ms in JavaScriptCore.
 
 On the polygons the ears cannot cut exactly, 82 at zoom 13, the triangles differ from an even-odd fill of the rings
 on 0.15% of the pixels on average and 2.6% at worst; earcut on 31% and 483%.
@@ -119,4 +119,6 @@ on 0.15% of the pixels on average and 2.6% at worst; earcut on 31% and 483%.
 - `shrink()` frees the module's buffers, which otherwise keep the size of the largest polygon seen.
 - `earstrip.d.ts` has the types.
 
-The C++ header the module is built from works natively as well. ISC licence.
+The C++ header the module is built from works natively as well: [GLMap/earstrip](https://github.com/GLMap/earstrip)
+on GitHub. How the ears are cut and what each idea saves, step by step:
+[Cutting map polygons into triangles](https://globus.software/blog/2026/10/16/cutting-map-polygons/). ISC licence.
