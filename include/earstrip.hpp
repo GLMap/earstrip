@@ -2305,20 +2305,19 @@ private:
     emptyTriangle(const Item *items, uint32_t begin, uint32_t end, const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic)
     {
         const double abx = b.x - a.x, aby = b.y - a.y, bcx = c.x - b.x, bcy = c.y - b.y, cax = a.x - c.x, cay = a.y - c.y;
-        // branch-free pass counting blockers in the closed triangle; the rare hits are checked against the corners after
+        // branch-free pass marking blockers in the closed triangle; the rare hits are checked against the corners after
+        assert(end - begin <= SmallBlockers);
         uint32_t hits = 0;
         for (uint32_t i = begin; i < end; ++i) {
             const Item &p = items[i];
             const double side =
                 std::min(std::min(abx * (p.y - a.y) - aby * (p.x - a.x), bcx * (p.y - b.y) - bcy * (p.x - b.x)), cax * (p.y - c.y) - cay * (p.x - c.x));
-            hits += (uint32_t)(side >= 0) & (uint32_t)(p.node != ia) & (uint32_t)(p.node != ic);
+            hits |= ((uint32_t)(side >= 0) & (uint32_t)(p.node != ia) & (uint32_t)(p.node != ic)) << (i - begin);
         }
-        if (hits == 0)
-            return true;
-        for (uint32_t i = begin; i < end; ++i) {
-            const Item &p = items[i];
-            if (p.node == ia || p.node == ic || cross(a.x, a.y, b.x, b.y, p.x, p.y) < 0 || cross(b.x, b.y, c.x, c.y, p.x, p.y) < 0 ||
-                cross(c.x, c.y, a.x, a.y, p.x, p.y) < 0)
+        while (hits) {
+            const Item &p = items[begin + detail::lowestBit(hits)];
+            hits &= hits - 1;
+            if (cross(a.x, a.y, b.x, b.y, p.x, p.y) < 0 || cross(b.x, b.y, c.x, c.y, p.x, p.y) < 0 || cross(c.x, c.y, a.x, a.y, p.x, p.y) < 0)
                 continue;
             if ((p.x != a.x || p.y != a.y) && (p.x != b.x || p.y != b.y) && (p.x != c.x || p.y != c.y))
                 return false;
