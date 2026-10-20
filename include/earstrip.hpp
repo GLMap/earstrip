@@ -1704,10 +1704,12 @@ private:
     {
         _extra.clear();
         _careful = false;
-        if (_constrained && rings.count() > MaxEarRings && cover(rings, false))
+        // With many rings the constrained triangulation goes first; when it fails, it would fail again after the ears
+        const bool manyRings = _constrained && rings.count() > MaxEarRings;
+        if (manyRings && cover(rings, false))
             return Status::Constrained;
         const Status s = runOnce(rings);
-        if (_constrained && (s == Status::Refused || s == Status::HolesLeftOut) && cover(rings, s == Status::HolesLeftOut))
+        if (_constrained && !manyRings && (s == Status::Refused || s == Status::HolesLeftOut) && cover(rings, s == Status::HolesLeftOut))
             return Status::Constrained;
         if (s != Status::Refused || !_forcedCuts)
             return s;
