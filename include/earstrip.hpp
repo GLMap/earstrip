@@ -277,7 +277,7 @@ template <class Index> class Constrained {
 
     enum class WalkEnd : uint8_t { Target, Vertex, Crossing, Failed };
     enum class Location : uint8_t { Vertex, Edge, Triangle, Outside };
-    enum : uint8_t { Unseen = 0, Seen, Dropped, Free, Used };
+    enum : uint8_t { Unseen = 0, Seen, Used };
 
     struct Point {
         double x, y;
@@ -301,11 +301,7 @@ template <class Index> class Constrained {
     std::vector<uint32_t> _chain;
     std::vector<Wind> _triangleWind;
     std::vector<uint8_t> _state;
-    std::vector<uint8_t> _degree;
-    std::vector<uint32_t> _candidates;
-    std::vector<uint32_t> _run;   // vertices of a strip run
-    std::vector<uint32_t> _taken;         // triangles of the last strip
-    std::vector<uint32_t> _stripVertices; // vertices of the last strip
+    std::vector<uint32_t> _run; // vertices a strip gets in front, in that order
     std::vector<Index> _strips;
     std::vector<uint32_t> _stripEnds;
     std::vector<uint8_t> _stripCW; // first triangle of the strip runs clockwise
@@ -390,8 +386,7 @@ public:
                 return false;
             }
         }
-        fill();
-        buildStrips();
+        fillStrips();
         return true;
     }
 
@@ -1351,10 +1346,11 @@ private:
         _vertexEdge[x] = prev;
     }
 
-    // ---------- fill ----------
+    // ---------- fill and strips ----------
 
-    // Winding numbers of the triangles, from the outside in, and the kept ones.
-    void fill()
+    // Winding numbers of the triangles from the outside in, and the kept ones as strips in the same pass: where the flood
+    // finds a kept triangle in no strip yet, a strip starts there and follows its zig-zag both ways.
+    void fillStrips()
     {
         const uint32_t triangles = _triangleCount;
         if (_triangleWind.size() < triangles)
@@ -1376,147 +1372,94 @@ private:
         while (!_stack.empty()) {
             const uint32_t t = _stack.back();
             _stack.pop_back();
-            const Wind w = _triangleWind[t];
-            for (uint32_t e = 3 * t; e < 3 * t + 3; ++e) {
-                const uint32_t f = _twin[e];
-                if (f == None) {
-                    assert(sameForRule(w, _wind[e]));
-                    continue;
-                }
-                const uint32_t n = f / 3;
-                const Wind nw = w + _wind[f];
-                if (_state[n] == Unseen) {
-                    _state[n] = Seen;
-                    _triangleWind[n] = nw;
-                    _stack.push_back(n);
-                } else {
-                    assert(sameForRule(_triangleWind[n], nw));
-                }
-            }
+            explore(t);
+            if (open(t))
+                walkStrip(t);
         }
-        for (uint32_t t = 0; t < triangles; ++t)
-            _state[t] = keep(_triangleWind[t]) ? Free : Dropped;
     }
 
-    // ---------- strips ----------
+    // A kept triangle whose winding is known and that is in no strip yet.
+    bool open(uint32_t t) const { return _state[t] == Seen && keep(_triangleWind[t]); }
 
-    // Covers the kept triangles with strips. A strip starts at a triangle with the fewest free neighbors, takes the
-    // longest of its zig-zag runs and grows both ways.
-    void buildStrips()
+    // Gives the unseen neighbors of t their winding and queues them.
+    void explore(uint32_t t)
     {
-        const uint32_t triangles = _triangleCount;
-        if (_degree.size() < triangles)
-            _degree.resize(std::max<size_t>(triangles, 2 * _degree.size()));
-        _candidates.clear();
-        for (uint32_t t = 0; t < triangles; ++t) {
-            if (_state[t] != Free)
+        const Wind w = _triangleWind[t];
+        for (uint32_t e = 3 * t; e < 3 * t + 3; ++e) {
+            const uint32_t f = _twin[e];
+            if (f == None) {
+                assert(sameForRule(w, _wind[e]));
                 continue;
-            uint8_t d = 0;
-            for (uint32_t e = 3 * t; e < 3 * t + 3; ++e)
-                d += _twin[e] != None && _state[_twin[e] / 3] == Free;
-            _degree[t] = d;
-            if (d <= 1)
-                _candidates.push_back(t);
-        }
-        std::reverse(_candidates.begin(), _candidates.end());
-        uint32_t scan = 0;
-        while (true) {
-            uint32_t t = None;
-            while (!_candidates.empty()) {
-                const uint32_t c = _candidates.back();
-                _candidates.pop_back();
-                if (_state[c] == Free) {
-                    t = c;
-                    break;
-                }
             }
-            if (t == None) {
-                while (scan < triangles && _state[scan] != Free)
-                    scan++;
-                if (scan == triangles)
-                    break;
-                t = scan;
+            const uint32_t n = f / 3;
+            const Wind nw = w + _wind[f];
+            if (_state[n] != Unseen) {
+                assert(sameForRule(_triangleWind[n], nw));
+                continue;
             }
-            emitStrip(t);
+            _state[n] = Seen;
+            _triangleWind[n] = nw;
+            _stack.push_back(n);
         }
     }
 
-    // Free triangles in a row from the triangle of exit half-edge g; the newest strip vertex is g's origin when atStart.
-    uint32_t runLength(uint32_t g, bool atStart) const
+    // A strip through triangle t. It leaves t forwards through one edge and backwards through the edge before it, so with
+    // two open neighbors it takes the pair of edges that leads to both. Then it goes on forwards through the edge of its
+    // last two vertices and backwards through the edge of its first two while the triangle behind is open.
+    void walkStrip(uint32_t t)
     {
-        uint32_t count = 0;
-        while (true) {
-            const uint32_t u = _twin[g];
-            if (u == None || _state[u / 3] != Free)
-                return count;
-            count++;
-            g = atStart ? nextEdge(u) : prevEdge(u);
-            atStart = !atStart;
+        bool on[3];
+        for (uint32_t i = 0; i < 3; ++i)
+            on[i] = _twin[3 * t + i] != None && open(_twin[3 * t + i] / 3);
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < 3; ++i) {
+            if (on[i] && on[(i + 2) % 3]) {
+                k = i;
+                break;
+            }
+            if (on[i] && !on[k])
+                k = i;
         }
-    }
-
-    // Takes the run into _run (new vertices) and marks its triangles used.
-    void takeRun(uint32_t g, bool atStart)
-    {
-        while (true) {
-            const uint32_t u = _twin[g];
-            if (u == None || _state[u / 3] != Free)
-                return;
-            _state[u / 3] = Used;
-            _taken.push_back(u / 3);
-            _run.push_back(_org[prevEdge(u)]);
-            g = atStart ? nextEdge(u) : prevEdge(u);
-            atStart = !atStart;
-        }
-    }
-
-    void emitStrip(uint32_t t)
-    {
+        const uint32_t exit = 3 * t + k;
+        // r, p, q runs counterclockwise and leaves forwards through p -> q, backwards through r -> p
+        const uint32_t p = _org[exit], q = _org[nextEdge(exit)], r = _org[prevEdge(exit)];
         _state[t] = Used;
-        const uint32_t e = 3 * t;
-        // option o: rotation o / 2, counterclockwise order when o is even
-        uint32_t best = 0, bestLength = 0;
-        for (uint32_t o = 0; o < 6; ++o) {
-            const uint32_t r = o / 2, h0 = e + r, h1 = e + (r + 1) % 3, h2 = e + (r + 2) % 3;
-            const uint32_t length = (o & 1) == 0 ? runLength(h1, false) + runLength(h0, true) : runLength(h1, true) + runLength(h2, false);
-            if (length > bestLength || o == 0) {
-                best = o;
-                bestLength = length;
-            }
-        }
-        const uint32_t r = best / 2, h0 = e + r, h1 = e + (r + 1) % 3, h2 = e + (r + 2) % 3;
-        const bool ccw = (best & 1) == 0;
-        _taken.clear();
-        _taken.push_back(t);
         _run.clear();
-        if (ccw)
-            takeRun(h0, true);
-        else
-            takeRun(h2, false);
-        _stripVertices.clear();
+        for (uint32_t e = prevEdge(exit), front = r;;) {
+            const uint32_t f = _twin[e];
+            if (f == None || !open(f / 3))
+                break;
+            const uint32_t n = f / 3, z = _org[prevEdge(f)];
+            _state[n] = Used;
+            explore(n);
+            _run.push_back(z);
+            // the first two strip vertices are now z and front: the edge of n between them
+            e = _org[nextEdge(f)] == front ? nextEdge(f) : prevEdge(f);
+            front = z;
+        }
         for (size_t i = _run.size(); i > 0; --i)
-            _stripVertices.push_back(_run[i - 1]);
-        const uint32_t a = _org[h0], b = _org[h1], c = _org[h2];
-        _stripVertices.push_back(a);
-        _stripVertices.push_back(ccw ? b : c);
-        _stripVertices.push_back(ccw ? c : b);
-        _run.clear();
-        takeRun(h1, !ccw);
-        for (uint32_t v : _run)
-            _stripVertices.push_back(v);
-        for (uint32_t v : _stripVertices)
-            _strips.push_back(_outIndex[v]);
-        _stripEnds.push_back((uint32_t)_strips.size());
-        _stripCW.push_back(orient(_stripVertices[0], _stripVertices[1], _stripVertices[2]) < 0);
-        // neighbors of the used triangles lose a free neighbor
-        for (uint32_t used : _taken) {
-            for (uint32_t g = 3 * used; g < 3 * used + 3; ++g) {
-                const uint32_t n = _twin[g] == None ? None : _twin[g] / 3;
-                if (n != None && _state[n] == Free && --_degree[n] <= 1)
-                    _candidates.push_back(n);
-            }
+            put(_run[i - 1]);
+        put(r);
+        put(p);
+        put(q);
+        for (uint32_t e = exit, last = q;;) {
+            const uint32_t f = _twin[e];
+            if (f == None || !open(f / 3))
+                break;
+            const uint32_t n = f / 3, z = _org[prevEdge(f)];
+            _state[n] = Used;
+            explore(n);
+            put(z);
+            // the last two strip vertices are now last and z: the edge of n between them
+            e = _org[f] == last ? prevEdge(f) : nextEdge(f);
+            last = z;
         }
+        _stripEnds.push_back((uint32_t)_strips.size());
+        // r, p, q runs counterclockwise; each vertex put in front turns the first triangle over
+        _stripCW.push_back(_run.size() & 1);
     }
+
+    void put(uint32_t v) { _strips.push_back(_outIndex[v]); }
 };
 
 #if defined(EARSTRIP_SMALL_CONSTRAINED) && defined(__clang__)
