@@ -79,14 +79,17 @@ The ideas behind earstrip and what each of them saves are told step by step in
 
 Only a reflex vertex can stop a corner from being an ear, so the ear test reads the dents of the polygon alone. A
 branch-free pass marks the dents inside the ear's triangle, and only those get an exact check; past 32 dents they are
-sorted into buckets along the longer axis, and a test reads only the buckets its triangle spans. After an ear is cut,
-its neighbours are tried first, and every ear cut there adds one index to the strip. Convex rings, triangles and
-quads need no tests at all.
+sorted into buckets along the longer axis, and a test reads only the buckets its triangle spans. From six dents on the
+pass takes two at a time with SSE2 on x86-64, NEON on arm64 and, when built with `-msimd128`, WebAssembly SIMD; the
+result is the same as that of the scalar loop, which `EARSTRIP_NO_SIMD` keeps. After an ear is cut, its neighbours are
+tried first, and every ear cut there adds one index to the strip. Convex rings, triangles and quads need no tests at
+all.
 
 Holes are joined to the outer ring by Eberly's bridges, rightmost first, with the cases tile grids produce: a vertex
-lying on the ray, and a hole that touches the outer ring at a vertex or inside an edge. The predicates are exact for
-integer coordinates within ±2²⁵ in the ears and for 32-bit integers in the constrained triangulation, which rounds
-other input to a 2³⁰ grid over the polygon's bounding box.
+lying on the ray, and a hole that touches the outer ring at a vertex or inside an edge. With four holes or more a
+bridge passes over the boundary in blocks of 16 vertices, skipping those whose edges its ray cannot meet. The
+predicates are exact for integer coordinates within ±2²⁵ in the ears and for 32-bit integers in the constrained
+triangulation, which rounds other input to a 2³⁰ grid over the polygon's bounding box.
 
 ## Numbers
 

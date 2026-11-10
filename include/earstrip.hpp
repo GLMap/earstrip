@@ -792,7 +792,8 @@ private:
 
     // ---------- mesh ----------
 
-    static uint32_t nextEdge(uint32_t e) { return e % 3 == 2 ? e - 2 : e + 1; }
+    // e + 1 leaves the triangle exactly when it is a multiple of 3, which costs less to find out than e % 3
+    static uint32_t nextEdge(uint32_t e) { return (e + 1) % 3 == 0 ? e - 2 : e + 1; }
     static uint32_t prevEdge(uint32_t e) { return e % 3 == 0 ? e + 2 : e - 1; }
 
     uint32_t newTriangle(uint32_t a, uint32_t b, uint32_t c)
