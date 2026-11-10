@@ -32,6 +32,21 @@
 #    endif
 #endif
 
+// Two doubles at a time for the ear test: SSE2, NEON or WebAssembly SIMD, each a baseline of its target (WebAssembly
+// when built with -msimd128). EARSTRIP_NO_SIMD keeps the scalar loop, which gives the same result.
+#if !defined(EARSTRIP_NO_SIMD)
+#    if defined(__x86_64__) || defined(_M_X64)
+#        include <emmintrin.h>
+#        define EARSTRIP_SIMD 1
+#    elif defined(__aarch64__) || defined(_M_ARM64)
+#        include <arm_neon.h>
+#        define EARSTRIP_SIMD 1
+#    elif defined(__wasm_simd128__)
+#        include <wasm_simd128.h>
+#        define EARSTRIP_SIMD 1
+#    endif
+#endif
+
 namespace earstrip {
 
 // How a polygon was covered.
@@ -121,6 +136,56 @@ template <class T, class Less> void sortItems(T *a, size_t n, Less less)
     std::sort(a, a + n, less);
 #endif
 }
+
+#if defined(EARSTRIP_SIMD)
+// A pair of doubles and a pair of 64-bit masks. minOf(a, b) is std::min(a, b) also when one of them is not a number.
+#    if defined(__x86_64__) || defined(_M_X64)
+using F2 = __m128d;
+using B2 = __m128i;
+EARSTRIP_INLINE F2 load(const double *p) { return _mm_loadu_pd(p); }
+EARSTRIP_INLINE F2 splat(double v) { return _mm_set1_pd(v); }
+EARSTRIP_INLINE F2 sub(F2 a, F2 b) { return _mm_sub_pd(a, b); }
+EARSTRIP_INLINE F2 mul(F2 a, F2 b) { return _mm_mul_pd(a, b); }
+EARSTRIP_INLINE F2 minOf(F2 a, F2 b) { return _mm_min_pd(b, a); }
+EARSTRIP_INLINE B2 notNegative(F2 a) { return _mm_castpd_si128(_mm_cmpge_pd(a, _mm_setzero_pd())); }
+EARSTRIP_INLINE B2 noBits() { return _mm_setzero_si128(); }
+EARSTRIP_INLINE B2 firstBits() { return _mm_set_epi64x(2, 1); }
+EARSTRIP_INLINE B2 nextBits(B2 a) { return _mm_slli_epi64(a, 2); }
+EARSTRIP_INLINE B2 both(B2 a, B2 b) { return _mm_and_si128(a, b); }
+EARSTRIP_INLINE B2 either(B2 a, B2 b) { return _mm_or_si128(a, b); }
+EARSTRIP_INLINE uint64_t fold(B2 a) { return (uint64_t)_mm_cvtsi128_si64(a) | (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(a, a)); }
+#    elif defined(__aarch64__) || defined(_M_ARM64)
+using F2 = float64x2_t;
+using B2 = uint64x2_t;
+EARSTRIP_INLINE F2 load(const double *p) { return vld1q_f64(p); }
+EARSTRIP_INLINE F2 splat(double v) { return vdupq_n_f64(v); }
+EARSTRIP_INLINE F2 sub(F2 a, F2 b) { return vsubq_f64(a, b); }
+EARSTRIP_INLINE F2 mul(F2 a, F2 b) { return vmulq_f64(a, b); }
+EARSTRIP_INLINE F2 minOf(F2 a, F2 b) { return vbslq_f64(vcltq_f64(b, a), b, a); }
+EARSTRIP_INLINE B2 notNegative(F2 a) { return vcgezq_f64(a); }
+EARSTRIP_INLINE B2 noBits() { return vdupq_n_u64(0); }
+EARSTRIP_INLINE B2 firstBits() { return vcombine_u64(vcreate_u64(1), vcreate_u64(2)); }
+EARSTRIP_INLINE B2 nextBits(B2 a) { return vshlq_n_u64(a, 2); }
+EARSTRIP_INLINE B2 both(B2 a, B2 b) { return vandq_u64(a, b); }
+EARSTRIP_INLINE B2 either(B2 a, B2 b) { return vorrq_u64(a, b); }
+EARSTRIP_INLINE uint64_t fold(B2 a) { return vgetq_lane_u64(a, 0) | vgetq_lane_u64(a, 1); }
+#    else
+using F2 = v128_t;
+using B2 = v128_t;
+EARSTRIP_INLINE F2 load(const double *p) { return wasm_v128_load(p); }
+EARSTRIP_INLINE F2 splat(double v) { return wasm_f64x2_splat(v); }
+EARSTRIP_INLINE F2 sub(F2 a, F2 b) { return wasm_f64x2_sub(a, b); }
+EARSTRIP_INLINE F2 mul(F2 a, F2 b) { return wasm_f64x2_mul(a, b); }
+EARSTRIP_INLINE F2 minOf(F2 a, F2 b) { return wasm_f64x2_pmin(a, b); }
+EARSTRIP_INLINE B2 notNegative(F2 a) { return wasm_f64x2_ge(a, wasm_f64x2_splat(0)); }
+EARSTRIP_INLINE B2 noBits() { return wasm_i64x2_splat(0); }
+EARSTRIP_INLINE B2 firstBits() { return wasm_i64x2_make(1, 2); }
+EARSTRIP_INLINE B2 nextBits(B2 a) { return wasm_i64x2_shl(a, 2); }
+EARSTRIP_INLINE B2 both(B2 a, B2 b) { return wasm_v128_and(a, b); }
+EARSTRIP_INLINE B2 either(B2 a, B2 b) { return wasm_v128_or(a, b); }
+EARSTRIP_INLINE uint64_t fold(B2 a) { return (uint64_t)wasm_i64x2_extract_lane(a, 0) | (uint64_t)wasm_i64x2_extract_lane(a, 1); }
+#    endif
+#endif
 
 // Rings of a polygon given as a container of containers of points.
 template <class Polygon> struct NestedRings {
@@ -1563,6 +1628,8 @@ private:
     // Up to this many blockers an ear test scans them all; more are sorted into buckets of about BlockersPerBucket.
     static constexpr uint32_t SmallBlockers = 32;
     static constexpr double BlockersPerBucket = 2.0;
+    // Fewer blockers than this are tested one by one: two at a time pays from here on.
+    static constexpr uint32_t FewBlockers = 6;
     // Largest boundary the second run splits at its crossings; larger ones go straight to forced cuts.
     static constexpr uint32_t SplitLimit = 4096;
 
@@ -1577,11 +1644,6 @@ private:
             uint8_t indexed; // listed in the blocker index
         };
         uint16_t ring; // 0 outer, holes from 1
-    };
-
-    struct Item {
-        double x, y;
-        uint32_t node;
     };
 
     struct Hole {
@@ -1606,7 +1668,10 @@ private:
     std::vector<uint32_t> _cycle;   // nodes of a boundary in walking order
     std::vector<uint32_t> _loops;   // start node and length of loops still to clip
     std::vector<uint32_t> _hash;
-    std::vector<Item> _items;           // blockers by bucket; a single bucket stays compact, otherwise gone ones get x = inf
+    // Blockers by bucket, their positions apart from their nodes so that an ear test reads coordinates alone; a single
+    // bucket stays compact, otherwise gone ones get x = inf
+    std::vector<double> _itemX, _itemY;
+    std::vector<uint32_t> _itemNode;
     std::vector<uint32_t> _bucketStart; // first item of each bucket
     std::vector<uint32_t> _slot;        // item of each indexed node
     double _bucketOrigin = 0, _bucketScale = 0;
@@ -1700,7 +1765,10 @@ private:
             _samePos.resize(capacity);
             _slot.resize(capacity);
             _blockers.resize(capacity);
-            _items.resize(capacity);
+            // an ear test reads the coordinates in pairs
+            _itemX.resize(capacity + 1);
+            _itemY.resize(capacity + 1);
+            _itemNode.resize(capacity);
         }
 
         double area;
@@ -1940,12 +2008,11 @@ private:
     bool classifyRing(uint32_t count, bool reversed)
     {
         Node *n = _nodes.data();
-        uint32_t *blockers = _blockers.data();
-        Item *items = _items.data();
+        double *itemX = _itemX.data(), *itemY = _itemY.data();
+        uint32_t *itemNode = _itemNode.data();
         uint32_t *slot = _slot.data();
         const double sign = reversed ? -1.0 : 1.0;
-        uint32_t found = 0, turns = 0;
-        int firstDir = 0, lastDir = 0;
+        uint32_t found = 0;
         double ex = n[0].x - n[count - 1].x, ey = n[0].y - n[count - 1].y;
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t prev = i == 0 ? count - 1 : i - 1, next = i + 1 == count ? 0 : i + 1;
@@ -1956,37 +2023,49 @@ private:
             node.prev = reversed ? next : prev;
             node.next = reversed ? prev : next;
             // written for every node, kept only for reflex ones
-            blockers[found] = i;
-            items[found] = {node.x, node.y, i};
+            itemX[found] = node.x;
+            itemY[found] = node.y;
+            itemNode[found] = i;
             slot[i] = found;
             found += reflex;
-            // a ring that turns around once switches the x direction of its edges twice
+            ex = fx;
+            ey = fy;
+        }
+        _blockerCount = found;
+        return found == 0 && turnsOnce(count);
+    }
+
+    // True when the edges of the single ring turn around once: they switch their x direction twice.
+    bool turnsOnce(uint32_t count) const
+    {
+        const Node *n = _nodes.data();
+        uint32_t turns = 0;
+        int firstDir = 0, lastDir = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            const double fx = n[i + 1 == count ? 0 : i + 1].x - n[i].x;
             const int dir = (fx > 0) - (fx < 0);
             turns += dir != 0 && lastDir != 0 && dir != lastDir;
             firstDir = firstDir ? firstDir : dir;
             lastDir = dir ? dir : lastDir;
-            ex = fx;
-            ey = fy;
         }
-        turns += firstDir != lastDir;
-        _blockerCount = found;
-        return found == 0 && turns == 2;
+        return turns + (firstDir != lastDir) == 2;
     }
 
     // Flags the corners of the linked boundary and collects blockers; returns the vertex count.
     uint32_t classifyCycle(uint32_t start)
     {
         Node *n = _nodes.data();
-        uint32_t *blockers = _blockers.data();
-        Item *items = _items.data();
+        double *itemX = _itemX.data(), *itemY = _itemY.data();
+        uint32_t *itemNode = _itemNode.data();
         uint32_t *slot = _slot.data();
         uint32_t count = 0, found = 0, v = start;
         do {
             Node &node = n[v];
             const bool reflex = cross(n[node.prev], node, n[node.next]) <= 0;
             node.reflex = node.indexed = reflex;
-            blockers[found] = v;
-            items[found] = {node.x, node.y, v};
+            itemX[found] = node.x;
+            itemY[found] = node.y;
+            itemNode[found] = v;
             slot[v] = found;
             found += reflex;
             count++;
@@ -2199,14 +2278,17 @@ private:
     {
         const Node *n = _nodes.data();
         const uint32_t count = _blockerCount;
-        const uint32_t *blockers = _blockers.data();
-        Item *items = _items.data();
+        double *itemX = _itemX.data(), *itemY = _itemY.data();
+        uint32_t *itemNode = _itemNode.data();
         uint32_t *slot = _slot.data();
         _live = _built = count;
         _buckets = 1;
         // a short list stays as the classification wrote it
         if (count <= SmallBlockers)
             return;
+        // the items are written in bucket order, so their nodes are read from a copy
+        uint32_t *blockers = _blockers.data();
+        std::memcpy(blockers, itemNode, count * sizeof(uint32_t));
         double minX = n[blockers[0]].x, minY = n[blockers[0]].y, maxX = minX, maxY = minY;
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t b = blockers[i];
@@ -2231,7 +2313,9 @@ private:
         for (uint32_t k = 0; k < count; ++k) {
             const uint32_t b = blockers[k];
             const uint32_t i = start[bucketOf(n[b])]++;
-            items[i] = {n[b].x, n[b].y, b};
+            itemX[i] = n[b].x;
+            itemY[i] = n[b].y;
+            itemNode[i] = b;
             slot[b] = i;
         }
         for (uint32_t c = buckets; c > 0; --c)
@@ -2242,54 +2326,82 @@ private:
     uint32_t bucket(double u) const { return (uint32_t)std::clamp((int64_t)((u - _bucketOrigin) * _bucketScale), (int64_t)0, (int64_t)_buckets - 1); }
     uint32_t bucketOf(const Node &v) const { return bucket(_axisY ? v.y : v.x); }
 
-    // True when no blocker in items [begin, end) lies in the closed triangle a, b, c (counter-clockwise) away from its corners;
-    // the neighbors ia and ic are corners themselves.
-    EARSTRIP_INLINE static bool
-    emptyTriangle(const Item *items, uint32_t begin, uint32_t end, const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic)
+    // Marks the blockers among count items, 64 at most, that lie in the closed triangle a, b, c (counter-clockwise): bit
+    // k is item k. Without branches; reads one item past an odd count.
+    EARSTRIP_INLINE static uint64_t insideMask(const double *xs, const double *ys, uint32_t count, const Node &a, const Node &b, const Node &c)
     {
-        const double abx = b.x - a.x, aby = b.y - a.y, bcx = c.x - b.x, bcy = c.y - b.y, cax = a.x - c.x, cay = a.y - c.y;
-        // branch-free pass marking blockers in the closed triangle; the rare hits are checked against the corners after
-        assert(end - begin <= SmallBlockers);
-        uint32_t hits = 0;
-        for (uint32_t i = begin; i < end; ++i) {
-            const Item &p = items[i];
-            const double side =
-                std::min(std::min(abx * (p.y - a.y) - aby * (p.x - a.x), bcx * (p.y - b.y) - bcy * (p.x - b.x)), cax * (p.y - c.y) - cay * (p.x - c.x));
-            hits |= ((uint32_t)(side >= 0) & (uint32_t)(p.node != ia) & (uint32_t)(p.node != ic)) << (i - begin);
+#if defined(EARSTRIP_SIMD)
+        using namespace detail;
+        const F2 ax = splat(a.x), ay = splat(a.y), bx = splat(b.x), by = splat(b.y), cx = splat(c.x), cy = splat(c.y);
+        const F2 abx = sub(bx, ax), aby = sub(by, ay), bcx = sub(cx, bx), bcy = sub(cy, by), cax = sub(ax, cx), cay = sub(ay, cy);
+        B2 hits = noBits(), bit = firstBits();
+        for (uint32_t i = 0; i < count; i += 2) {
+            const F2 px = load(xs + i), py = load(ys + i);
+            const F2 side = minOf(minOf(sub(mul(abx, sub(py, ay)), mul(aby, sub(px, ax))), sub(mul(bcx, sub(py, by)), mul(bcy, sub(px, bx)))),
+                sub(mul(cax, sub(py, cy)), mul(cay, sub(px, cx))));
+            hits = either(hits, both(notNegative(side), bit));
+            bit = nextBits(bit);
         }
-        while (hits) {
-            const Item &p = items[begin + detail::lowestBit(hits)];
-            hits &= hits - 1;
-            if (cross(a.x, a.y, b.x, b.y, p.x, p.y) < 0 || cross(b.x, b.y, c.x, c.y, p.x, p.y) < 0 || cross(c.x, c.y, a.x, a.y, p.x, p.y) < 0)
-                continue;
-            if ((p.x != a.x || p.y != a.y) && (p.x != b.x || p.y != b.y) && (p.x != c.x || p.y != c.y))
-                return false;
+        // the item past an odd count is not one
+        return fold(hits) & ~((uint64_t)(count & 1) << (count & 63));
+#else
+        const double abx = b.x - a.x, aby = b.y - a.y, bcx = c.x - b.x, bcy = c.y - b.y, cax = a.x - c.x, cay = a.y - c.y;
+        uint64_t hits = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            const double px = xs[i], py = ys[i];
+            const double side = std::min(std::min(abx * (py - a.y) - aby * (px - a.x), bcx * (py - b.y) - bcy * (px - b.x)), cax * (py - c.y) - cay * (px - c.x));
+            hits |= (uint64_t)(side >= 0) << i;
+        }
+        return hits;
+#endif
+    }
+
+    // True when no blocker in items [begin, end) lies in the closed triangle a, b, c (counter-clockwise) away from its
+    // corners; the neighbors ia and ic are corners themselves. One pass marks the blockers in the triangle, a gone one
+    // (x = inf) being on the outer side of an edge; the rare hits are then checked against the corners.
+    EARSTRIP_INLINE bool emptyTriangle(uint32_t begin, uint32_t end, const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic) const
+    {
+        const double *xs = _itemX.data(), *ys = _itemY.data();
+        const uint32_t *slot = _slot.data();
+        for (uint32_t base = begin; base < end; base += 64) {
+            uint64_t hits = insideMask(xs + base, ys + base, std::min(end - base, 64u), a, b, c);
+            // the neighbors lie in the triangle whenever they are blockers
+            const uint32_t sa = slot[ia] - base, sc = slot[ic] - base;
+            hits &= ~((uint64_t)(a.indexed & (sa < 64)) << (sa & 63));
+            hits &= ~((uint64_t)(c.indexed & (sc < 64)) << (sc & 63));
+            while (hits) {
+                const uint32_t i = base + detail::lowestBit(hits);
+                hits &= hits - 1;
+                const double px = xs[i], py = ys[i];
+                if (cross(a.x, a.y, b.x, b.y, px, py) < 0 || cross(b.x, b.y, c.x, c.y, px, py) < 0 || cross(c.x, c.y, a.x, a.y, px, py) < 0)
+                    continue;
+                if ((px != a.x || py != a.y) && (px != b.x || py != b.y) && (px != c.x || py != c.y))
+                    return false;
+            }
         }
         return true;
     }
 
-    // Bucket variant: a branch-free bounding box pass, then exact tests on the few hits.
-    static bool emptyTriangleBox(const Item *items, uint32_t begin, uint32_t end, const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic)
+    // The same for the first count items, a few: the pass leaves the neighbors out by their nodes.
+    EARSTRIP_INLINE bool emptyTriangleFew(uint32_t count, const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic) const
     {
-        const double minX = std::min(a.x, std::min(b.x, c.x)), maxX = std::max(a.x, std::max(b.x, c.x));
-        const double minY = std::min(a.y, std::min(b.y, c.y)), maxY = std::max(a.y, std::max(b.y, c.y));
-        for (uint32_t base = begin; base < end; base += 64) {
-            const uint32_t stop = std::min(end, base + 64);
-            uint64_t mask = 0;
-            for (uint32_t i = base; i < stop; ++i) {
-                const Item &p = items[i];
-                const uint64_t in = (uint64_t)(p.x >= minX) & (uint64_t)(p.x <= maxX) & (uint64_t)(p.y >= minY) & (uint64_t)(p.y <= maxY) &
-                                    (uint64_t)(p.node != ia) & (uint64_t)(p.node != ic);
-                mask |= in << (i - base);
-            }
-            while (mask) {
-                const Item &p = items[base + detail::lowestBit(mask)];
-                mask &= mask - 1;
-                if (cross(a.x, a.y, b.x, b.y, p.x, p.y) < 0 || cross(b.x, b.y, c.x, c.y, p.x, p.y) < 0 || cross(c.x, c.y, a.x, a.y, p.x, p.y) < 0)
-                    continue;
-                if ((p.x != a.x || p.y != a.y) && (p.x != b.x || p.y != b.y) && (p.x != c.x || p.y != c.y))
-                    return false;
-            }
+        const double *xs = _itemX.data(), *ys = _itemY.data();
+        const uint32_t *nodes = _itemNode.data();
+        const double abx = b.x - a.x, aby = b.y - a.y, bcx = c.x - b.x, bcy = c.y - b.y, cax = a.x - c.x, cay = a.y - c.y;
+        uint32_t hits = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            const double px = xs[i], py = ys[i];
+            const double side = std::min(std::min(abx * (py - a.y) - aby * (px - a.x), bcx * (py - b.y) - bcy * (px - b.x)), cax * (py - c.y) - cay * (px - c.x));
+            hits |= ((uint32_t)(side >= 0) & (uint32_t)(nodes[i] != ia) & (uint32_t)(nodes[i] != ic)) << i;
+        }
+        while (hits) {
+            const uint32_t i = detail::lowestBit(hits);
+            hits &= hits - 1;
+            const double px = xs[i], py = ys[i];
+            if (cross(a.x, a.y, b.x, b.y, px, py) < 0 || cross(b.x, b.y, c.x, c.y, px, py) < 0 || cross(c.x, c.y, a.x, a.y, px, py) < 0)
+                continue;
+            if ((px != a.x || py != a.y) && (px != b.x || py != b.y) && (px != c.x || py != c.y))
+                return false;
         }
         return true;
     }
@@ -2304,13 +2416,12 @@ private:
             return true;
         const uint32_t ia = b.prev, ic = b.next;
         const Node &a = n[ia], &c = n[ic];
-        const Item *items = _items.data();
         if (_buckets == 1)
-            return emptyTriangle(items, 0, _live, a, b, c, ia, ic);
+            return _live < FewBlockers ? emptyTriangleFew(_live, a, b, c, ia, ic) : emptyTriangle(0, _live, a, b, c, ia, ic);
         const uint32_t *start = _bucketStart.data();
         const double lo = _axisY ? std::min(a.y, std::min(b.y, c.y)) : std::min(a.x, std::min(b.x, c.x));
         const double hi = _axisY ? std::max(a.y, std::max(b.y, c.y)) : std::max(a.x, std::max(b.x, c.x));
-        return emptyTriangleBox(items, start[bucket(lo)], start[bucket(hi) + 1], a, b, c, ia, ic);
+        return emptyTriangle(start[bucket(lo)], start[bucket(hi) + 1], a, b, c, ia, ic);
     }
 
     // Updates the corner flag of node v, dropping it from the blockers once it turns convex.
@@ -2326,14 +2437,16 @@ private:
     void dropBlocker(Node &v, uint32_t id)
     {
         v.indexed = 0;
-        Item *items = _items.data();
         const uint32_t i = _slot[id];
         _live--;
         if (_buckets == 1) {
-            items[i] = items[_live];
-            _slot[items[i].node] = i;
+            const uint32_t last = _itemNode[_live];
+            _itemX[i] = _itemX[_live];
+            _itemY[i] = _itemY[_live];
+            _itemNode[i] = last;
+            _slot[last] = i;
         } else {
-            items[i].x = std::numeric_limits<double>::infinity();
+            _itemX[i] = std::numeric_limits<double>::infinity();
             if (_live * 2 < _built)
                 rebuildIndex();
         }
@@ -2342,15 +2455,17 @@ private:
     // Rebuilds the buckets from the live items once half of them are gone.
     void rebuildIndex()
     {
-        uint32_t *blockers = _blockers.data();
         uint32_t found = 0;
-        Item *items = _items.data();
+        double *itemX = _itemX.data(), *itemY = _itemY.data();
+        uint32_t *itemNode = _itemNode.data();
         uint32_t *slot = _slot.data();
         for (uint32_t i = 0; i < _built; ++i) {
-            if (items[i].x != std::numeric_limits<double>::infinity()) {
-                blockers[found] = items[i].node;
-                items[found] = items[i];
-                slot[items[i].node] = found;
+            if (itemX[i] != std::numeric_limits<double>::infinity()) {
+                const uint32_t node = itemNode[i];
+                itemX[found] = itemX[i];
+                itemY[found] = itemY[i];
+                itemNode[found] = node;
+                slot[node] = found;
                 found++;
             }
         }
@@ -2398,15 +2513,15 @@ private:
     // Blockers in the closed triangle a, b, c away from its corners, counted over the whole index.
     uint32_t blockersInside(const Node &a, const Node &b, const Node &c, uint32_t ia, uint32_t ic) const
     {
-        const Item *items = _items.data();
         const uint32_t end = _buckets == 1 ? _live : _built;
         uint32_t hits = 0;
         for (uint32_t i = 0; i < end; ++i) {
-            const Item &p = items[i];
-            if (p.node == ia || p.node == ic || cross(a.x, a.y, b.x, b.y, p.x, p.y) < 0 || cross(b.x, b.y, c.x, c.y, p.x, p.y) < 0 ||
-                cross(c.x, c.y, a.x, a.y, p.x, p.y) < 0)
+            const double px = _itemX[i], py = _itemY[i];
+            const uint32_t node = _itemNode[i];
+            if (node == ia || node == ic || cross(a.x, a.y, b.x, b.y, px, py) < 0 || cross(b.x, b.y, c.x, c.y, px, py) < 0 ||
+                cross(c.x, c.y, a.x, a.y, px, py) < 0)
                 continue;
-            hits += (p.x != a.x || p.y != a.y) && (p.x != b.x || p.y != b.y) && (p.x != c.x || p.y != c.y);
+            hits += (px != a.x || py != a.y) && (px != b.x || py != b.y) && (px != c.x || py != c.y);
         }
         return hits;
     }
