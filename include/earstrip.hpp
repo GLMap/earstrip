@@ -1632,6 +1632,8 @@ private:
     static constexpr uint32_t FewBlockers = 6;
     // Largest boundary the second run splits at its crossings; larger ones go straight to forced cuts.
     static constexpr uint32_t SplitLimit = 4096;
+    // A bridge looks at the boundary in blocks of this many nodes and passes over those its ray cannot meet.
+    static constexpr uint32_t BlockShift = 4, BlockSize = 1u << BlockShift, BlockHoles = 4;
 
     struct Node {
         double x, y;
@@ -1674,6 +1676,8 @@ private:
     std::vector<uint32_t> _itemNode;
     std::vector<uint32_t> _bucketStart; // first item of each bucket
     std::vector<uint32_t> _slot;        // item of each indexed node
+    // Per block of nodes, the bounds of the nodes and of the ends of their edges: y range and largest x
+    std::vector<double> _blockMinY, _blockMaxY, _blockMaxX;
     double _bucketOrigin = 0, _bucketScale = 0;
     uint32_t _buckets = 1;
     bool _axisY = false;
@@ -1815,6 +1819,7 @@ private:
             used += holeCount;
         }
         findTouches(used);
+        boundBlocks(used, total + 2 * ringCount);
         _merged.assign(_holes.size() + 1, 0);
         _merged[0] = 1;
         _order.clear();
@@ -1975,6 +1980,31 @@ private:
         }
     }
 
+    // Bounds of the blocks of the nodes [0, used) with their edges; the blocks up to capacity nodes start empty.
+    void boundBlocks(uint32_t used, uint32_t capacity)
+    {
+        const size_t blocks = (capacity >> BlockShift) + 1;
+        const double inf = std::numeric_limits<double>::infinity();
+        // with few holes the bounds cost more than the bridges save: blocks that hold everything
+        const bool few = _holes.size() < BlockHoles;
+        _blockMinY.assign(blocks, few ? -inf : inf);
+        _blockMaxY.assign(blocks, few ? inf : -inf);
+        _blockMaxX.assign(blocks, few ? inf : -inf);
+        for (uint32_t v = 0; v < used && !few; ++v)
+            boundEdge(v);
+    }
+
+    // Widens the bounds of node v's block by v and the end of its edge; called whenever the edge changes.
+    EARSTRIP_INLINE void boundEdge(uint32_t v)
+    {
+        const Node *n = _nodes.data();
+        const Node &a = n[v], &b = n[a.next];
+        const uint32_t block = v >> BlockShift;
+        _blockMinY[block] = std::min(_blockMinY[block], std::min(a.y, b.y));
+        _blockMaxY[block] = std::max(_blockMaxY[block], std::max(a.y, b.y));
+        _blockMaxX[block] = std::max(_blockMaxX[block], std::max(a.x, b.x));
+    }
+
     // Splices a hole into the boundary at a vertex they share; false when it touches nothing merged.
     bool joinTouching(const Hole &hole)
     {
@@ -1997,6 +2027,8 @@ private:
                 n[sn].prev = v;
                 n[s].next = vn;
                 n[vn].prev = s;
+                boundEdge(v);
+                boundEdge(s);
                 return true;
             }
         }
@@ -2148,8 +2180,17 @@ private:
         double bestX = std::numeric_limits<double>::infinity(), rayX = bestX;
         uint32_t edge = None, onEdge = None, onRay = None;
         bool up = false;
-        // the boundary is every node of a merged ring, each with its outgoing edge
+        // the boundary is every node of a merged ring, each with its outgoing edge; a block whose edges all lie above,
+        // below or left of the ray has nothing for it
+        const double *blockMinY = _blockMinY.data(), *blockMaxY = _blockMaxY.data(), *blockMaxX = _blockMaxX.data();
         for (uint32_t v = 0; v < used; ++v) {
+            if ((v & (BlockSize - 1)) == 0) {
+                const uint32_t block = v >> BlockShift;
+                if (my < blockMinY[block] || my > blockMaxY[block] || mx > blockMaxX[block]) {
+                    v += BlockSize - 1;
+                    continue;
+                }
+            }
             const Node &a = n[v];
             if (!merged[a.ring])
                 continue;
@@ -2193,6 +2234,9 @@ private:
             n[edgeEnd].prev = m2;
             _samePos[m2] = _samePos[m];
             _samePos[m] = m2;
+            boundEdge(onEdge);
+            boundEdge(mp);
+            boundEdge(m2);
             return true;
         }
         if (onRay != None && rayX < bestX) {
@@ -2227,6 +2271,13 @@ private:
         uint32_t best = None;
         double bdx = 0, bdy = 0;
         for (uint32_t v = 0; v < used; ++v) {
+            if ((v & (BlockSize - 1)) == 0) {
+                const uint32_t block = v >> BlockShift;
+                if (y1 < blockMinY[block] || y0 > blockMaxY[block] || mx > blockMaxX[block]) {
+                    v += BlockSize - 1;
+                    continue;
+                }
+            }
             const Node &r = n[v];
             const bool box = (r.x >= mx) & (r.x <= px) & (r.y >= y0) & (r.y <= y1);
             if (box && !(r.x == px && r.y == py) && merged[r.ring]) {
@@ -2270,6 +2321,10 @@ private:
         _samePos[t] = t2;
         _samePos[m2] = _samePos[m];
         _samePos[m] = m2;
+        boundEdge(t);
+        boundEdge(mp);
+        boundEdge(m2);
+        boundEdge(t2);
     }
 
     // Sorts the blockers into buckets along the longer axis of their bounds, so a query is one contiguous range;
