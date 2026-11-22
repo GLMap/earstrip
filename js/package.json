@@ -1,6 +1,6 @@
 {
   "name": "earstrip",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Fast polygon triangulation into triangle strips: ear clipping with a constrained Delaunay fallback for broken rings, in WebAssembly, with an earcut-compatible call",
   "type": "module",
   "main": "earstrip.js",
@@ -12,7 +12,7 @@
       "default": "./earstrip.js"
     }
   },
-  "files": ["earstrip.js", "earstrip.d.ts", "dist/wasm.js", "dist/earstrip.wasm"],
+  "files": ["earstrip.js", "earstrip.d.ts", "dist/wasm.js", "dist/wasm-scalar.js", "dist/earstrip.wasm", "dist/earstrip-scalar.wasm"],
   "scripts": {
     "build": "./build.sh",
     "test": "node test/test.mjs"

@@ -41,15 +41,25 @@ function views() {
     u8 = new Uint8Array(memory.buffer);
 }
 
-const bytes = decode(wasmBase64);
+// The smallest module with a SIMD instruction: an engine without WebAssembly SIMD refuses it and gets the module built
+// without SIMD, imported only then, so that bundlers keep it in a chunk of its own.
+const simd = WebAssembly.validate(new Uint8Array([
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
 // Compiling synchronously lets earstrip() be called right after the import; where that is not allowed (a browser
-// main thread may refuse it), `ready` resolves once the module is compiled.
+// main thread may refuse it) or the engine has no SIMD, `ready` resolves once the module is compiled.
 export let ready;
-try {
-    start(new WebAssembly.Instance(new WebAssembly.Module(bytes), imports));
-    ready = Promise.resolve();
-} catch (e) {
-    ready = WebAssembly.instantiate(bytes, imports).then((r) => start(r.instance));
+if (simd) {
+    const bytes = decode(wasmBase64);
+    try {
+        start(new WebAssembly.Instance(new WebAssembly.Module(bytes), imports));
+        ready = Promise.resolve();
+    } catch (e) {
+        ready = WebAssembly.instantiate(bytes, imports).then((r) => start(r.instance));
+    }
+} else {
+    ready = import('./dist/wasm-scalar.js')
+        .then((m) => WebAssembly.instantiate(decode(m.default), imports))
+        .then((r) => start(r.instance));
 }
 
 function load(data, holeIndices, dim) {

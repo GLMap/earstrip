@@ -6,8 +6,8 @@ constrained Delaunay triangulation instead of keeping whatever triangles the ear
 library, and a WebAssembly build for JavaScript that takes the same arguments as
 [earcut](https://github.com/mapbox/earcut).
 
-On 3.7 million polygons of a real map it is 13% faster than earcut.hpp in C++ and 1.4 to 2.1 times faster than
-earcut.js in the browser, and 6 to 7 times faster on polygons with thousands of holes. It is the triangulator of the
+On 3.7 million polygons of a real map it is 31% faster than earcut.hpp in C++ and 1.6 to 2.3 times faster than
+earcut.js in the browser, and 7 to 9 times faster on polygons with thousands of holes. It is the triangulator of the
 [GLMap](https://globus.software) map engine, which cuts every building, park and lake of an offline map on the phone
 with it.
 
@@ -80,10 +80,10 @@ The ideas behind earstrip and what each of them saves are told step by step in
 Only a reflex vertex can stop a corner from being an ear, so the ear test reads the dents of the polygon alone. A
 branch-free pass marks the dents inside the ear's triangle, and only those get an exact check; past 32 dents they are
 sorted into buckets along the longer axis, and a test reads only the buckets its triangle spans. From six dents on the
-pass takes two at a time with SSE2 on x86-64, NEON on arm64 and, when built with `-msimd128`, WebAssembly SIMD; the
-result is the same as that of the scalar loop, which `EARSTRIP_NO_SIMD` keeps. After an ear is cut, its neighbours are
-tried first, and every ear cut there adds one index to the strip. Convex rings, triangles and quads need no tests at
-all.
+pass takes two at a time with SSE2 on x86-64, NEON on arm64 and WebAssembly SIMD (`-msimd128`; the npm package loads
+a module without it in engines that lack it); the result is the same as that of the scalar loop, which
+`EARSTRIP_NO_SIMD` keeps. After an ear is cut, its neighbours are tried first, and every ear cut there adds one index
+to the strip. Convex rings, triangles and quads need no tests at all.
 
 Holes are joined to the outer ring by Eberly's bridges, rightmost first, with the cases tile grids produce: a vertex
 lying on the ray, and a hole that touches the outer ring at a vertex or inside an edge. With four holes or more a
@@ -97,11 +97,11 @@ OpenStreetMap polygons in tile coordinates, one thread of an Apple M4 Pro, best 
 
 | | earstrip | earcut |
 | --- | ---: | ---: |
-| 3,740,425 polygons of the Masovian Voivodeship at zoom 13, C++ | 490 ms | 552 ms |
-| the same in WebAssembly, inside an engine, V8 / JavaScriptCore | 601 / 566 ms | 930 / 843 ms |
-| the same through the npm package, one call per polygon | 766 / 807 ms | 1,103 / 1,290 ms |
-| the same through the package, all polygons in one direct call | 635 / 619 ms | |
-| 56,472 polygons of world map tiles, up to 11,675 holes in one, C++ | 459 ms | 2,892 ms |
+| 3,740,425 polygons of the Masovian Voivodeship at zoom 13, C++ | 431 ms | 565 ms |
+| the same in WebAssembly, inside an engine, V8 / JavaScriptCore | 523 / 490 ms | 923 / 837 ms |
+| the same through the npm package, one call per polygon | 691 / 737 ms | 1,107 / 1,292 ms |
+| the same through the package, all polygons in one direct call | 575 / 551 ms | |
+| 56,472 polygons of world map tiles, up to 11,675 holes in one, C++ | 397 ms | 2,815 ms |
 
 earcut here is earcut.hpp 3.2.4 in C++ and WebAssembly and earcut.js 3.2.4 through JavaScript.
 [BENCHMARKS.md](BENCHMARKS.md) has every number of the same run, with zoom 9 and the wrong pixels; below is how to

@@ -1,14 +1,24 @@
 // JavaScript tests: small cases, then (given a PLY1 file with expected hashes) the WebAssembly build against the
 // native results on every polygon of it.
-// Usage: node test/test.mjs [polygons.bin]
+// Usage: node test/test.mjs [polygons.bin]; BUN_JSC_useWasmSIMD=0 bun test/test.mjs runs them on the module without
+// SIMD, which an engine without WebAssembly SIMD gets after `ready`.
 import { readFileSync } from 'node:fs';
-import earstrip, { batch, direct, flatten, lastStatus, setConstrained, setForcedCuts, shrink, strips } from '../earstrip.js';
+import earstrip, { batch, direct, flatten, lastStatus, ready, setConstrained, setForcedCuts, shrink, strips } from '../earstrip.js';
 
 let failures = 0;
 function check(name, ok, detail = '') {
     console.log(`${name.padEnd(44)} ${ok ? 'PASS' : 'FAIL'} ${detail}`);
     failures += !ok;
 }
+
+let onImport = true;
+try {
+    earstrip([0, 0, 1, 0, 0, 1]);
+} catch (e) {
+    onImport = false;
+}
+await ready;
+console.log(`module compiled ${onImport ? 'on import' : 'after ready'}`);
 
 function area(data, tri, dim = 2) {
     let sum = 0;

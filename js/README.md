@@ -1,7 +1,7 @@
 # earstrip
 
 Polygon triangulation compiled to WebAssembly: ear clipping into triangle strips, and a constrained Delaunay
-triangulation for the polygons ears cannot cut. 1.4 to 2.1 times as fast as earcut on map polygons, 6 to 7 times on
+triangulation for the polygons ears cannot cut. 1.6 to 2.3 times as fast as earcut on map polygons, 7 to 9 times on
 polygons with thousands of holes, and right where earcut paints the wrong area on broken rings.
 
 There are two ways to call it:
@@ -13,7 +13,10 @@ There are two ways to call it:
   WebGL 2 or WebGPU.
 
 The module is inlined and compiles synchronously where the platform allows it; elsewhere `await ready` before the
-first call. It is 68 KB, 27 KB with gzip.
+first call. It is 77 KB, 28 KB with gzip, and uses WebAssembly SIMD: Chrome and Edge 91, Firefox 89, Safari 16.4,
+Node 16.4 or later. Older engines get a 74 KB module without SIMD, with the same results, imported only there, and
+need `await ready` too. Bundlers that split chunks keep that module in a chunk of its own: webpack, Rollup and Vite,
+esbuild and Bun with `--splitting`. Without splitting both modules go into the bundle, 38 KB more with gzip.
 
 ## In place of earcut
 
@@ -95,20 +98,20 @@ OpenStreetMap polygons in tile coordinates, Apple M4 Pro, one thread, best of 7 
 
 | | V8 (Node 26) | JavaScriptCore (Bun 1.3) |
 |---|---:|---:|
-| 3,740,425 polygons of zoom 13: `earstrip()`, one call per polygon | 766 ms | 807 ms |
-| the same, all in one `batch()` call | 671 ms | 661 ms |
-| the same, `direct.run()` per polygon, `'strips'` | 682 ms | 662 ms |
-| the same, `direct.run()` per polygon, `'restart'` | 747 ms | 721 ms |
-| the same, all in one `direct.batch()` call, `'restart'` | 635 ms | 619 ms |
-| the same, earcut.js | 1,103 ms | 1,290 ms |
-| 56,472 polygons of world map tiles, up to 11,675 holes: `earstrip()` | 662 ms | 633 ms |
-| the same, earcut.js | 4,927 ms | 4,016 ms |
+| 3,740,425 polygons of zoom 13: `earstrip()`, one call per polygon | 691 ms | 737 ms |
+| the same, all in one `batch()` call | 599 ms | 585 ms |
+| the same, `direct.run()` per polygon, `'strips'` | 605 ms | 585 ms |
+| the same, `direct.run()` per polygon, `'restart'` | 678 ms | 647 ms |
+| the same, all in one `direct.batch()` call, `'restart'` | 575 ms | 551 ms |
+| the same, earcut.js | 1,107 ms | 1,292 ms |
+| 56,472 polygons of world map tiles, up to 11,675 holes: `earstrip()` | 560 ms | 549 ms |
+| the same, earcut.js | 4,873 ms | 4,042 ms |
 
 Beyond the triangulation itself, the time goes mostly into turning the strips into another layout: a list for
 `earstrip()`, a restart buffer for `'restart'`. Copying the coordinates in and making the JavaScript array cost little
 in V8, more in JavaScriptCore. `'strips'` hands the strips over as they are, and a batch also saves crossing into
 WebAssembly for every polygon. With the polygons as 16-bit coordinates already in WebAssembly memory and the loop
-inside the module, the same zoom 13 takes 601 ms in V8 and 566 ms in JavaScriptCore.
+inside the module, the same zoom 13 takes 523 ms in V8 and 490 ms in JavaScriptCore.
 
 On the polygons the ears cannot cut exactly, 82 at zoom 13, the triangles differ from an even-odd fill of the rings
 on 0.15% of the pixels on average and 2.6% at worst; earcut on 31% and 483%.
