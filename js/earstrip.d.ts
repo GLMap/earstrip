@@ -21,7 +21,7 @@ declare namespace earstrip {
     /** GeoJSON-style rings as earstrip's arguments. */
     function flatten(rings: ArrayLike<ArrayLike<ArrayLike<number>>>): { vertices: number[]; holes: number[]; dimensions: number };
     /** The direct calls: no copies, results as views into the module's memory. */
-    const direct: typeof import('./earstrip').direct;
+    const direct: typeof import('./earstrip.js').direct;
     /** Resolves once the WebAssembly module is compiled; already resolved where it compiles synchronously. */
     const ready: Promise<void>;
 }
